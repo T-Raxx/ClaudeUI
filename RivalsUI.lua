@@ -14,6 +14,7 @@
         t:AddToggle("BlueOnly", { Text = "Solo monedas azules" })   -- dependent, hidden till parent on
         Box:AddSlider("Speed", { Text = "Velocidad", Min = 1, Max = 10, Default = 3, Callback = fn })
         Box:AddDropdown("Mode", { Text = "Modo", Values = {"A","B"}, Default = "A", Callback = fn })
+        Box:AddColorPicker("Col", { Text = "Color", Default = Color3.fromRGB(255,0,0), Callback = fn })  -- stores a Color3 in Flags
         Box:AddButton("Do", fn)
         Library:Unload()
 
@@ -47,6 +48,9 @@ local Library = {
     DragOffset = Vector2.zero,
     ActiveSlider = nil,
     OpenDropdown = nil,
+    OpenPicker   = nil,   -- element whose colorpicker popup is open (exclusive with OpenDropdown)
+    PickerDrag   = nil,   -- "sv" | "hue" while dragging inside the popup
+    Picker       = nil,   -- shared popup singleton (built lazily on first colorpicker open)
 
     Font       = 2,   -- 0 UI, 1 System, 2 Plain, 3 Monospace
     FontSize   = 13,
@@ -237,6 +241,11 @@ function Groupbox:AddToggle(flag, opts)
     end
     function e:AddDropdown(cflag, copts)
         local c = self.Box:AddDropdown(cflag, copts)
+        self:_dependChild(c, true)
+        return c
+    end
+    function e:AddColorPicker(cflag, copts)
+        local c = self.Box:AddColorPicker(cflag, copts)
         self:_dependChild(c, true)
         return c
     end
@@ -438,6 +447,224 @@ function Groupbox:AddDropdown(flag, opts)
                 self:Close()
                 return true
             end
+        end
+        return false
+    end
+
+    table.insert(self.Elements, e)
+    return e
+end
+
+----------------------------------------------------------------------
+-- COLORPICKER  (shared popup singleton + per-element swatch)
+--   One SV grid + hue bar is built once on Library and repositioned for
+--   whichever picker opens (like the dropdown overlay). Flags[flag]=Color3.
+----------------------------------------------------------------------
+function Library:_ensurePicker()
+    if self.Picker then return self.Picker end
+    local P = {
+        GRID = 14, HUE = 24,
+        planeW = 140, planeH = 140, hueW = 14, gap = 6, pad = 6,
+        cells = {}, hueCells = {},
+        X = 0, Y = 0, planeX = 0, planeY = 0, hueX = 0,
+    }
+    P.bg   = self:Draw("Square", { Filled = true,  Color = self.Theme.Header })
+    P.bgOl = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
+    for i = 1, P.GRID * P.GRID do
+        P.cells[i] = self:Draw("Square", { Filled = true })
+    end
+    for i = 1, P.HUE do
+        P.hueCells[i] = self:Draw("Square", { Filled = true })
+    end
+    P.hueOl = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
+    P.svCur = self:Draw("Square", { Filled = false, Color = Color3.new(1, 1, 1) }) -- white ring
+    P.svCr2 = self:Draw("Square", { Filled = false, Color = Color3.new(0, 0, 0) }) -- black inner ring
+    P.hueCur= self:Draw("Square", { Filled = false, Color = Color3.new(1, 1, 1) })
+    self.Picker = P
+    return P
+end
+
+function Library:_popupSize()
+    local P = self.Picker
+    return P.pad * 2 + P.planeW + P.gap + P.hueW, P.pad * 2 + P.planeH
+end
+
+function Library:_renderPicker(owner)
+    local P = self.Picker
+    if not P then return end
+    local x = owner.Abs.X
+    local y = owner.Abs.Y + owner.Height + 3
+    P.X, P.Y = x, y
+    local popupW, popupH = self:_popupSize()
+    setRect(P.bg, P.bgOl, x, y, popupW, popupH, 50)
+    P.bgOl.ZIndex = 59
+    P.bg.Visible, P.bgOl.Visible = true, true
+
+    local H, S, V = owner.H, owner.S, owner.V
+    local planeX, planeY = x + P.pad, y + P.pad
+    P.planeX, P.planeY = planeX, planeY
+    local G = P.GRID
+    local cw, ch = P.planeW / G, P.planeH / G
+    for gy = 0, G - 1 do
+        for gx = 0, G - 1 do
+            local cell = P.cells[gy * G + gx + 1]
+            cell.Color    = Color3.fromHSV(H, (gx + 0.5) / G, 1 - (gy + 0.5) / G)
+            cell.Position = Vector2.new(planeX + gx * cw, planeY + gy * ch)
+            cell.Size     = Vector2.new(cw + 1, ch + 1)
+            cell.ZIndex   = 51
+            cell.Visible  = true
+        end
+    end
+
+    local hueX = planeX + P.planeW + P.gap
+    P.hueX = hueX
+    local HN = P.HUE
+    local hh = P.planeH / HN
+    for i = 0, HN - 1 do
+        local seg = P.hueCells[i + 1]
+        seg.Color    = Color3.fromHSV(i / (HN - 1), 1, 1)
+        seg.Position = Vector2.new(hueX, planeY + i * hh)
+        seg.Size     = Vector2.new(P.hueW, hh + 1)
+        seg.ZIndex   = 51
+        seg.Visible  = true
+    end
+    setRect(P.hueOl, nil, hueX, planeY, P.hueW, P.planeH, 52)
+    P.hueOl.Visible = true
+
+    -- SV cursor
+    local cx = planeX + math.clamp(S, 0, 1) * P.planeW
+    local cy = planeY + (1 - math.clamp(V, 0, 1)) * P.planeH
+    P.svCur.Position = Vector2.new(cx - 4, cy - 4); P.svCur.Size = Vector2.new(8, 8); P.svCur.ZIndex = 55; P.svCur.Visible = true
+    P.svCr2.Position = Vector2.new(cx - 3, cy - 3); P.svCr2.Size = Vector2.new(6, 6); P.svCr2.ZIndex = 56; P.svCr2.Visible = true
+    -- hue cursor
+    local hy = planeY + math.clamp(H, 0, 1) * P.planeH
+    P.hueCur.Position = Vector2.new(hueX - 1, hy - 2); P.hueCur.Size = Vector2.new(P.hueW + 2, 4); P.hueCur.ZIndex = 55; P.hueCur.Visible = true
+end
+
+function Library:_hidePicker()
+    local P = self.Picker
+    if not P then return end
+    P.bg.Visible, P.bgOl.Visible, P.hueOl.Visible = false, false, false
+    P.svCur.Visible, P.svCr2.Visible, P.hueCur.Visible = false, false, false
+    for _, c in ipairs(P.cells) do c.Visible = false end
+    for _, c in ipairs(P.hueCells) do c.Visible = false end
+end
+
+-- click inside the open popup: returns true to consume (never closes while inside)
+function Library:_pickerPopupClick(m)
+    local P, owner = self.Picker, self.OpenPicker
+    if not (P and owner) then return false end
+    local popupW, popupH = self:_popupSize()
+    if not pointInRect(m.X, m.Y, P.X, P.Y, popupW, popupH) then return false end
+    if pointInRect(m.X, m.Y, P.planeX, P.planeY, P.planeW, P.planeH) then
+        self.PickerDrag = "sv"
+        owner:SetSV((m.X - P.planeX) / P.planeW, 1 - (m.Y - P.planeY) / P.planeH)
+    elseif pointInRect(m.X, m.Y, P.hueX, P.planeY, P.hueW, P.planeH) then
+        self.PickerDrag = "hue"
+        owner:SetHue((m.Y - P.planeY) / P.planeH)
+    end
+    return true
+end
+
+function Library:_pickerDrag(m)
+    local P, owner = self.Picker, self.OpenPicker
+    if not (P and owner and self.PickerDrag) then return end
+    if self.PickerDrag == "sv" then
+        owner:SetSV((m.X - P.planeX) / P.planeW, 1 - (m.Y - P.planeY) / P.planeH)
+    elseif self.PickerDrag == "hue" then
+        owner:SetHue((m.Y - P.planeY) / P.planeH)
+    end
+end
+
+function Groupbox:AddColorPicker(flag, opts)
+    opts = opts or {}
+    local e = Element.new(self, "ColorPicker")
+    e.Flag   = flag
+    e.Text   = opts.Text or flag
+    e.Indent = opts.Indent or 0
+    e.Callback = opts.Callback
+    e.Height = 17
+    local def = opts.Default or Color3.fromRGB(255, 255, 255)
+    e.H, e.S, e.V = def:ToHSV()
+
+    Library.Flags[flag]   = def
+    Library.Options[flag] = e
+
+    local SW = 26  -- swatch width
+    e.label = e:track(Library:Draw("Text",   { Font = Library.Font, Size = Library.FontSize, Color = Library.Theme.Text }))
+    e.sw    = e:track(Library:Draw("Square", { Filled = true, Color = def }))
+    e.swOl  = e:track(Library:Draw("Square", { Filled = false, Color = Library.Theme.Outline }))
+
+    function e:_apply(fire)
+        local c = Color3.fromHSV(self.H, self.S, self.V)
+        Library.Flags[self.Flag] = c
+        self.sw.Color = c
+        if fire ~= false then Library:SafeCallback(self.Callback, c) end
+    end
+    function e:Set(c)
+        if typeof(c) ~= "Color3" then return end
+        self.H, self.S, self.V = c:ToHSV()
+        self:_apply(true)
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+    function e:SetSV(s, v)
+        self.S, self.V = math.clamp(s, 0, 1), math.clamp(v, 0, 1)
+        self:_apply(true)
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+    function e:SetHue(h)
+        self.H = math.clamp(h, 0, 1)
+        self:_apply(true)
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+
+    function e:Draw(shown)
+        local shownReal = shown and Library:DepsMet(self)
+        if not shownReal then
+            self:SetShownAll(false)
+            if Library.OpenPicker == self then
+                Library.OpenPicker = nil; Library.PickerDrag = nil; Library:_hidePicker()
+            end
+            return false
+        end
+        local a = self.Abs
+        -- external change (config load) -> resync hsv from flag
+        local cf = Library.Flags[self.Flag]
+        if typeof(cf) == "Color3" and cf ~= self.sw.Color then
+            self.H, self.S, self.V = cf:ToHSV()
+            self.sw.Color = cf
+        end
+        self.label.Text = self.Text
+        self.label.Position = Vector2.new(a.X, a.Y + (self.Height - Library.FontSize) / 2); self.label.ZIndex = 4
+        local sh = 12
+        local sx = a.X + a.W - SW
+        local sy = a.Y + (self.Height - sh) / 2
+        setRect(self.sw, self.swOl, sx, sy, SW, sh, 4)
+        self.label.Visible, self.sw.Visible, self.swOl.Visible = true, true, true
+        if Library.OpenPicker == self then Library:_renderPicker(self) end
+        return true
+    end
+
+    function e:Open()
+        if Library.OpenDropdown then Library.OpenDropdown:Close() end
+        if Library.OpenPicker and Library.OpenPicker ~= self then Library.OpenPicker:Close() end
+        Library:_ensurePicker()
+        Library.OpenPicker = self
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+    function e:Close()
+        if Library.OpenPicker == self then
+            Library.OpenPicker = nil; Library.PickerDrag = nil
+            Library:_hidePicker()
+        end
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+
+    function e:HandleClick(m)
+        local a = self.Abs
+        if pointInRect(m.X, m.Y, a.X + a.W - SW, a.Y, SW, self.Height) then
+            if Library.OpenPicker == self then self:Close() else self:Open() end
+            return true
         end
         return false
     end
@@ -709,7 +936,10 @@ end
 function Library:Toggle(state)
     if state == nil then state = not self.Open end
     self.Open = state
-    if not state and self.OpenDropdown then self.OpenDropdown:Close() end
+    if not state then
+        if self.OpenDropdown then self.OpenDropdown:Close() end
+        if self.OpenPicker then self.OpenPicker:Close() end
+    end
     for _, w in ipairs(self.Windows) do w:Refresh() end
 end
 
@@ -722,6 +952,14 @@ Library:Connect(UserInputService.InputBegan, function(input, gpe)
     if not Library.Open then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
         local m = getMouse()
+        if Library.OpenPicker then
+            if Library:_pickerPopupClick(m) then return end
+            -- click on the swatch toggles; anything else closes
+            if not Library.OpenPicker:HandleClick(m) then
+                Library.OpenPicker:Close()
+            end
+            return
+        end
         if Library.OpenDropdown then
             if Library.OpenDropdown:HandleListClick(m) then return end
             -- click on the closed box toggles; anything else closes
@@ -747,6 +985,8 @@ Library:Connect(UserInputService.InputChanged, function(input)
             w:Refresh()
         elseif Library.ActiveSlider then
             Library.ActiveSlider:UpdateFromMouse(m)
+        elseif Library.PickerDrag then
+            Library:_pickerDrag(m)
         end
     end
 end)
@@ -755,6 +995,7 @@ Library:Connect(UserInputService.InputEnded, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
         Library.Dragging = nil
         Library.ActiveSlider = nil
+        Library.PickerDrag = nil
     end
 end)
 
