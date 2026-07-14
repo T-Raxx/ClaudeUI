@@ -737,14 +737,26 @@ end
 ----------------------------------------------------------------------
 -- GROUPBOX layout
 ----------------------------------------------------------------------
-function Groupbox:Layout(x, y, w, shown)
+-- alto del groupbox sin dibujar (para calcular scroll)
+function Groupbox:MeasureHeight()
+    local pad, titleH = 8, 18
+    local bodyH = pad
+    for _, e in ipairs(self.Elements) do
+        if Library:DepsMet(e) then bodyH = bodyH + e.Height + 6 end
+    end
+    return titleH + bodyH + 2
+end
+
+function Groupbox:Layout(x, y, w, shown, clipTop, clipBottom)
+    clipTop = clipTop or -1e9; clipBottom = clipBottom or 1e9
     local pad = 8
     local titleH = 18
-    -- header
+    -- header (clip vertical al panel)
+    local headerVis = shown and (y + titleH > clipTop) and (y < clipBottom)
     setRect(self.bg, self.bgOl, x, y, w, titleH, 2)
     self.title.Position = Vector2.new(x + 6, y + (titleH - Library.FontSize) / 2)
     self.title.ZIndex = 3
-    self.bg.Visible, self.bgOl.Visible, self.title.Visible = shown, shown, shown
+    self.bg.Visible, self.bgOl.Visible, self.title.Visible = headerVis, headerVis, headerVis
 
     local cy = y + titleH + pad
     for _, e in ipairs(self.Elements) do
@@ -752,23 +764,27 @@ function Groupbox:Layout(x, y, w, shown)
         if visible then
             local ind = e.Indent or 0
             e.Abs = { X = x + pad + ind, Y = cy, W = w - pad * 2 - ind, H = e.Height }
-            e:Draw(true)
+            local within = (cy + e.Height > clipTop) and (cy < clipBottom)   -- clip por elemento
+            e:Draw(within)
             cy = cy + e.Height + 6
         else
             e:Draw(false)
         end
     end
-    -- body background sits behind elements
-    local bodyH = (cy - (y + titleH)) + 2
-    setRect(self.bodyBg, nil, x, y + titleH, w, bodyH, 1)
-    self.bodyBg.Visible = shown
+    -- body background (clampeado al clip)
+    local bodyTop = y + titleH
+    local bodyH = (cy - bodyTop) + 2
+    local bt = math.max(bodyTop, clipTop); local bb = math.min(bodyTop + bodyH, clipBottom)
+    if shown and bb > bt then setRect(self.bodyBg, nil, x, bt, w, bb - bt, 1); self.bodyBg.Visible = true
+    else self.bodyBg.Visible = false end
 
     local total = titleH + bodyH
-    -- outline the whole box
-    self.outline.Position = Vector2.new(x, y)
-    self.outline.Size = Vector2.new(w, total)
-    self.outline.ZIndex = 6
-    self.outline.Visible = shown
+    -- outline (clampeado)
+    local ot = math.max(y, clipTop); local ob = math.min(y + total, clipBottom)
+    if shown and ob > ot then
+        self.outline.Position = Vector2.new(x, ot); self.outline.Size = Vector2.new(w, ob - ot)
+        self.outline.ZIndex = 6; self.outline.Visible = true
+    else self.outline.Visible = false end
 
     self.TotalHeight = total
     return total
@@ -810,11 +826,16 @@ function Library:CreateWindow(opts)
         X = opts.Position and opts.Position.X or 120,
         Y = opts.Position and opts.Position.Y or 120,
         W = (opts.Size and opts.Size.X) or 580,
-        -- Size.Y > 0 => fixed panel height (Linoria-style). 0/nil => auto-fit content.
-        H = (opts.Size and opts.Size.Y and opts.Size.Y > 0) and opts.Size.Y or nil,
+        -- Size.Y = altura MAXIMA visible del panel; si el contenido excede -> scroll.
+        MaxH = (opts.Size and opts.Size.Y and opts.Size.Y > 0) and opts.Size.Y or 600,
+        Scroll = 0, MaxScroll = 0,
         Tabs = {},
         ActiveTab = nil,
     }, Window)
+
+    -- scrollbar (barra lateral cuando hay overflow)
+    w.scrollBg  = Library:Draw("Square", { Filled = true, Color = Library.Theme.Header })
+    w.scrollBar = Library:Draw("Square", { Filled = true, Color = Library.Theme.Accent })
 
     w.headerBg = Library:Draw("Square", { Filled = true, Color = Library.Theme.Header })
     w.headerOl = Library:Draw("Square", { Filled = false, Color = Library.Theme.Outline })
@@ -894,20 +915,39 @@ function Window:Refresh()
         t.btnBg.Visible, t.btnTxt.Visible = open, open
     end
 
-    -- content columns
-    local contentY = tabY + tabH + pad
     local colW = (self.W - pad * 2 - gap) / 2
-    local leftY, rightY = contentY, contentY
+    local panelTop = tabY + tabH
 
+    -- 1) MEDIR alto de contenido de cada columna (tab activo)
+    local leftH, rightH = 0, 0
+    if self.ActiveTab and open then
+        for _, gb in ipairs(self.ActiveTab.Groupboxes) do
+            local h = gb:MeasureHeight() + gap
+            if gb.Side == "Right" then rightH = rightH + h else leftH = leftH + h end
+        end
+    end
+    local fullH = math.max(leftH, rightH)
+    if fullH > 0 then fullH = fullH - gap + pad * 2 end   -- padding sup/inf
+    local maxH = self.MaxH or 600
+    local visibleH = math.min(fullH, maxH)
+    if visibleH < 40 then visibleH = 40 end
+    self.MaxScroll = math.max(0, fullH - maxH)
+    self.Scroll = math.clamp(self.Scroll or 0, 0, self.MaxScroll)
+    local totalH = headerH + tabH + visibleH
+    local panelBottom = self.Y + totalH
+
+    -- 2) LAYOUT con scroll + clip
+    local startY = panelTop + pad - self.Scroll
+    local leftY, rightY = startY, startY
     for _, t in ipairs(self.Tabs) do
         local active = (t == self.ActiveTab) and open
         for _, gb in ipairs(t.Groupboxes) do
             if active then
                 if gb.Side == "Right" then
-                    local h = gb:Layout(self.X + pad + colW + gap, rightY, colW, true)
+                    local h = gb:Layout(self.X + pad + colW + gap, rightY, colW, true, panelTop, panelBottom)
                     rightY = rightY + h + gap
                 else
-                    local h = gb:Layout(self.X + pad, leftY, colW, true)
+                    local h = gb:Layout(self.X + pad, leftY, colW, true, panelTop, panelBottom)
                     leftY = leftY + h + gap
                 end
             else
@@ -916,18 +956,24 @@ function Window:Refresh()
         end
     end
 
-    -- window body background: fixed panel height if set, else fit to tallest column
-    local totalH
-    if self.H then
-        totalH = self.H
-    else
-        local bottom = math.max(leftY, rightY) + pad - gap
-        totalH = (bottom - self.Y)
-        if totalH < headerH + tabH + 40 then totalH = headerH + tabH + 40 end
-    end
     self.bg.Position = Vector2.new(self.X, self.Y); self.bg.Size = Vector2.new(self.W, totalH); self.bg.ZIndex = 0
     self.bgOl.Position = self.bg.Position; self.bgOl.Size = self.bg.Size; self.bgOl.ZIndex = 9
     self.bg.Visible, self.bgOl.Visible = open, open
+
+    -- scrollbar (cuando hay overflow)
+    local hasScroll = open and self.MaxScroll > 0
+    if hasScroll then
+        local trackH = visibleH
+        local barH = math.max(20, trackH * (visibleH / fullH))
+        local frac = self.Scroll / self.MaxScroll
+        local barY = panelTop + frac * (trackH - barH)
+        local sx = self.X + self.W - 5
+        self.scrollBg.Position = Vector2.new(sx, panelTop); self.scrollBg.Size = Vector2.new(3, trackH); self.scrollBg.ZIndex = 10; self.scrollBg.Visible = true
+        self.scrollBar.Position = Vector2.new(sx, barY); self.scrollBar.Size = Vector2.new(3, barH); self.scrollBar.ZIndex = 11; self.scrollBar.Visible = true
+    else
+        self.scrollBg.Visible = false; self.scrollBar.Visible = false
+    end
+    self._panelTop, self._panelBottom = panelTop, panelBottom   -- para el hit-test del wheel
 end
 
 ----------------------------------------------------------------------
@@ -987,6 +1033,15 @@ Library:Connect(UserInputService.InputChanged, function(input)
             Library.ActiveSlider:UpdateFromMouse(m)
         elseif Library.PickerDrag then
             Library:_pickerDrag(m)
+        end
+    elseif input.UserInputType == Enum.UserInputType.MouseWheel then
+        local m = getMouse()
+        for _, w in ipairs(Library.Windows) do
+            if (w.MaxScroll or 0) > 0 and pointInRect(m.X, m.Y, w.X, w.Y, w.W, w.bg.Size.Y) then
+                w.Scroll = math.clamp((w.Scroll or 0) - input.Position.Z * 45, 0, w.MaxScroll)
+                w:Refresh()
+                return
+            end
         end
     end
 end)
