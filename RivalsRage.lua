@@ -74,7 +74,9 @@ local Rage = {
         ShootHold = 0.2,           -- s manteniendo peek + aim tras disparar (proyectil viaja/registra + delay del arma)
         PeekTolerance = 8,         -- studs: cuan cerca del peek debe estar la pos real para confirmar y disparar
         HUD = true,                -- labels en pantalla (Ragebot: / Void... / killing / health)
-        HUDX = 24, HUDY = 300, HUDSize = 17,
+        HUDOffset = 42,            -- px debajo del centro de pantalla (la linea se ancla al crosshair)
+        HUDFadeSpeed = 0.6,        -- loops/seg del gradiente viajero de "Ragebot:"
+        HUDSize = 17,
         HUDFadeFrom = Color3.fromRGB(255,255,255), HUDFadeTo = Color3.fromRGB(0,0,0),   -- fade "Ragebot:" izq->der
         HUDVoidColor = Color3.fromRGB(150,150,160),
         HUDKillColor = Color3.fromRGB(255,255,255),
@@ -359,17 +361,30 @@ function Rage:_hudDraw(class, props)
     return o
 end
 
+--[[ ------------------------------------------------------------------
+    HUD: UNA linea horizontal centrada bajo el crosshair (estilo symbol.hit).
+
+        Ragebot:  Void...  killing: <user>...  health: <hp>
+
+    Un Drawing.Text no soporta color por segmento -> cada segmento es su
+    propio Text y se los apila a mano. "Ragebot:" ademas va char por char
+    para el gradiente. Se mide el ancho total (TextBounds.X) y se arranca
+    en cx - total/2, asi los segmentos ocultos no dejan hueco: la linea se
+    recentra sola.
+------------------------------------------------------------------ ]]
+local HUD_WORD = "Ragebot:"
+local HUD_GAP  = 10   -- px entre segmentos
+
 function Rage:_ensureHUD()
     if self._hud then return self._hud end
     local size = self:_flag("HUDSize", 17)
     local h = { chars = {} }
-    local word = "Ragebot:"
-    for i = 1, #word do
-        h.chars[i] = self:_hudDraw("Text", { Text = word:sub(i, i), Font = 3, Size = size })
+    for i = 1, #HUD_WORD do
+        h.chars[i] = self:_hudDraw("Text", { Text = HUD_WORD:sub(i, i), Font = 3, Size = size, Outline = true })
     end
-    h.void    = self:_hudDraw("Text", { Font = 3, Size = size, Center = true, Outline = true })
-    h.killing = self:_hudDraw("Text", { Font = 3, Size = size, Center = true, Outline = true })
-    h.health  = self:_hudDraw("Text", { Font = 3, Size = size, Center = true, Outline = true })
+    h.void    = self:_hudDraw("Text", { Font = 3, Size = size, Outline = true })
+    h.killing = self:_hudDraw("Text", { Font = 3, Size = size, Outline = true })
+    h.health  = self:_hudDraw("Text", { Font = 3, Size = size, Outline = true })
     self._hud = h
     return h
 end
@@ -380,37 +395,80 @@ function Rage:_hudHide()
     self._hud.void.Visible = false; self._hud.killing.Visible = false; self._hud.health.Visible = false
 end
 
+-- onda triangular 0->1->0, para que el gradiente cicle sin saltar
+local function tri(t)
+    t = t % 1
+    return (t < 0.5) and (t * 2) or (2 - t * 2)
+end
+
 function Rage:_updateHUD()
     if not self:_flag("HUD", true) then self:_hudHide(); return end
-    local hud = self:_ensureHUD()
-    local x, y = self:_flag("HUDX", 24), self:_flag("HUDY", 300)
+    local hud  = self:_ensureHUD()
     local size = self:_flag("HUDSize", 17)
-    -- "Ragebot:" con fade izq->der
-    local from = self:_flag("HUDFadeFrom", Color3.new(1, 1, 1))
-    local to   = self:_flag("HUDFadeTo", Color3.new(0, 0, 0))
-    local n = #hud.chars
-    local cx = x
+    local cam  = workspace.CurrentCamera
+    if not cam then return end
+    local vp = cam.ViewportSize
+    local cx, cy = vp.X / 2, vp.Y / 2 + self:_flag("HUDOffset", 42)
+
+    -- que segmentos se muestran
+    local showVoid = self._hudWaiting == true
+    local showTgt  = self._hudTargetName ~= nil
+    local voidTxt  = "Void..."
+    local killTxt  = showTgt and ("killing: " .. self._hudTargetName .. "...") or ""
+    local hpTxt    = showTgt and ("health: " .. tostring(math.floor((self._hudTargetHP or 0) + 0.5))) or ""
+
+    -- medir: hay que setear Text/Size ANTES de leer TextBounds
+    local charW = {}
+    local total = 0
     for i, ch in ipairs(hud.chars) do
         ch.Size = size
-        ch.Color = from:Lerp(to, (i - 1) / math.max(n - 1, 1))
-        ch.Position = Vector2.new(cx, y); ch.ZIndex = 200; ch.Visible = true
-        cx = cx + (ch.TextBounds.X > 0 and ch.TextBounds.X or size * 0.55)
+        local w = ch.TextBounds.X
+        if w <= 0 then w = size * 0.55 end   -- fallback si el executor no reporto bounds aun
+        charW[i] = w
+        total = total + w
     end
-    local ly = y + size + 3
-    -- "Void..." solo cuando el target murio / esperando respawn
-    if self._hudWaiting then
-        hud.void.Text = "Void..."; hud.void.Size = size; hud.void.Color = self:_flag("HUDVoidColor", Color3.fromRGB(150,150,160))
-        hud.void.Position = Vector2.new(x, ly); hud.void.ZIndex = 200; hud.void.Visible = true; ly = ly + size + 3
-    else hud.void.Visible = false end
-    -- killing / health cuando hay target
-    if self._hudTargetName then
-        hud.killing.Text = "killing: " .. self._hudTargetName .. "..."; hud.killing.Size = size
+    if showVoid then
+        hud.void.Text = voidTxt; hud.void.Size = size
+        total = total + HUD_GAP + hud.void.TextBounds.X
+    end
+    if showTgt then
+        hud.killing.Text = killTxt; hud.killing.Size = size
+        hud.health.Text  = hpTxt;   hud.health.Size  = size
+        total = total + HUD_GAP + hud.killing.TextBounds.X + HUD_GAP + hud.health.TextBounds.X
+    end
+
+    -- dibujar de izquierda a derecha desde el centro
+    local x = cx - total / 2
+    local from  = self:_flag("HUDFadeFrom", Color3.new(1, 1, 1))
+    local to    = self:_flag("HUDFadeTo", Color3.new(0, 0, 0))
+    local speed = self:_flag("HUDFadeSpeed", 0.6)
+    local phase = (tick() * speed) % 1        -- gradiente viajero izq->der
+    local n = #hud.chars
+    for i, ch in ipairs(hud.chars) do
+        ch.Color    = from:Lerp(to, tri((i - 1) / n + phase))
+        ch.Position = Vector2.new(x, cy)
+        ch.ZIndex   = 200
+        ch.Visible  = true
+        x = x + charW[i]
+    end
+    if showVoid then
+        x = x + HUD_GAP
+        hud.void.Color = self:_flag("HUDVoidColor", Color3.fromRGB(150, 150, 160))
+        hud.void.Position = Vector2.new(x, cy); hud.void.ZIndex = 200; hud.void.Visible = true
+        x = x + hud.void.TextBounds.X
+    else
+        hud.void.Visible = false
+    end
+    if showTgt then
+        x = x + HUD_GAP
         hud.killing.Color = self:_flag("HUDKillColor", Color3.new(1, 1, 1))
-        hud.killing.Position = Vector2.new(x, ly); hud.killing.ZIndex = 200; hud.killing.Visible = true; ly = ly + size + 3
-        hud.health.Text = "health: " .. tostring(math.floor((self._hudTargetHP or 0) + 0.5)); hud.health.Size = size
-        hud.health.Color = self:_flag("HUDHealthColor", Color3.fromRGB(120,230,120))
-        hud.health.Position = Vector2.new(x, ly); hud.health.ZIndex = 200; hud.health.Visible = true
-    else hud.killing.Visible = false; hud.health.Visible = false end
+        hud.killing.Position = Vector2.new(x, cy); hud.killing.ZIndex = 200; hud.killing.Visible = true
+        x = x + hud.killing.TextBounds.X + HUD_GAP
+        hud.health.Color = self:_flag("HUDHealthColor", Color3.fromRGB(120, 230, 120))
+        hud.health.Position = Vector2.new(x, cy); hud.health.ZIndex = 200; hud.health.Visible = true
+    else
+        hud.killing.Visible = false; hud.health.Visible = false
+    end
 end
 
 ----------------------------------------------------------------------
@@ -716,10 +774,16 @@ function Rage:BuildUI(Library, Window)
     rven:AddSlider("Rage_PeekHeight",    { Text = "Altura peek (encima)", Min = 5, Max = 260, Default = 260, Suffix = "st" })
     rven:AddSlider("Rage_VoidDistance",  { Text = "Distancia void (Fixed)", Min = 5000, Max = 2000000000, Default = 100000, Suffix = "st" })
 
-    local rh   = T:AddRightGroupbox("HUD (labels)")
+    -- HUD va inyectado en el tab Visuals de la BASE (no en el tab Rage): la base
+    -- nunca referencia rage, pero el groupbox aparece donde el user lo quiere.
+    local visuals = Window:GetTab("Visuals")
+    local rh = (visuals and visuals.AddRightGroupbox)
+        and visuals:AddRightGroupbox("HUD (labels)")
+        or  T:AddRightGroupbox("HUD (labels)")   -- fallback: si no hay Visuals, queda en Rage
+    self._hudBox, self._hudTab = rh, visuals or T
     local rhen = rh:AddToggle("Rage_HUD", { Text = "Mostrar HUD", Default = true })
-    rhen:AddSlider("Rage_HUDX",    { Text = "Pos X", Min = 0, Max = 1920, Default = 24 })
-    rhen:AddSlider("Rage_HUDY",    { Text = "Pos Y", Min = 0, Max = 1080, Default = 300 })
+    rhen:AddSlider("Rage_HUDOffset",    { Text = "Bajo el crosshair", Min = -300, Max = 400, Default = 42, Suffix = "px" })
+    rhen:AddSlider("Rage_HUDFadeSpeed", { Text = "Velocidad fade", Min = 0, Max = 4, Default = 0.6, Decimals = 2, Suffix = "/s" })
     rhen:AddSlider("Rage_HUDSize", { Text = "Tamano", Min = 10, Max = 40, Default = 17 })
     rhen:AddColorPicker("Rage_HUDFadeFrom",    { Text = "Ragebot fade desde", Default = Color3.fromRGB(255, 255, 255) })
     rhen:AddColorPicker("Rage_HUDFadeTo",      { Text = "Ragebot fade hasta", Default = Color3.fromRGB(0, 0, 0) })
@@ -738,6 +802,11 @@ function Rage:Unload()
     self:_weldClear(self:_myHRP())   -- soltar PhysicsRepRootPart
     if self._hudDrawings then for _, o in ipairs(self._hudDrawings) do pcall(function() o.Visible = false; o:Remove() end) end table.clear(self._hudDrawings) end
     self._hud = nil
+    -- soltar el groupbox que inyectamos en Visuals (si no, queda con flags muertos)
+    if self._hudBox and self._hudTab and self._hudTab.RemoveGroupbox then
+        pcall(function() self._hudTab:RemoveGroupbox(self._hudBox) end)
+    end
+    self._hudBox, self._hudTab = nil, nil
     for _, c in ipairs(self.Conns) do pcall(function() c:Disconnect() end) end
     table.clear(self.Conns)
     self:_setOOB(false)   -- restaurar el reporter OOB

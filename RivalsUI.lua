@@ -44,6 +44,9 @@ local Library = {
     ToggleKey  = Enum.KeyCode.RightShift,
     InsetY     = 0,   -- set 36 if hitboxes are vertically shifted on your executor
 
+    Keybinds   = {},   -- elementos con keybind (para la lista en pantalla)
+    CapturingKeybind = nil,   -- elemento esperando que apretes una tecla
+
     Dragging   = nil,
     DragOffset = Vector2.zero,
     ActiveSlider = nil,
@@ -194,9 +197,33 @@ function Groupbox:AddToggle(flag, opts)
     e.fill  = e:track(Library:Draw("Square", { Filled = true, Color = Library.Theme.Accent }))
     e.label = e:track(Library:Draw("Text", { Font = Library.Font, Size = Library.FontSize, Color = Library.Theme.Text }))
 
+    -- keybind opcional: caja de tecla a la derecha de la fila
+    if opts.Keybind then
+        e.HasKeybind = true
+        e.KeyFlag    = flag .. "_Key"
+        e.ModeFlag   = flag .. "_KeyMode"
+        Library.Flags[e.KeyFlag]  = opts.DefaultKey or "None"
+        Library.Flags[e.ModeFlag] = opts.KeyMode or "Toggle"
+        e.kBox   = e:track(Library:Draw("Square", { Filled = true,  Color = Library.Theme.Element }))
+        e.kBoxOl = e:track(Library:Draw("Square", { Filled = false, Color = Library.Theme.Outline }))
+        e.kTxt   = e:track(Library:Draw("Text",   { Font = Library.Font, Size = Library.FontSize - 1, Color = Library.Theme.DimText, Center = true }))
+        table.insert(Library.Keybinds, e)
+    end
+
+    function e:_keyLabel()
+        if Library.CapturingKeybind == self then return "..." end
+        local k = Library.Flags[self.KeyFlag]
+        if not k or k == "None" then return "---" end
+        return tostring(k)
+    end
+
     function e:Draw(shown)
         local shownReal = shown and Library:DepsMet(self)
-        if not shownReal then self:SetShownAll(false); return false end
+        if not shownReal then
+            self:SetShownAll(false)
+            if Library.CapturingKeybind == self then Library.CapturingKeybind = nil end
+            return false
+        end
         local a = self.Abs
         local bs = 13
         local by = a.Y + (self.Height - bs) / 2
@@ -209,6 +236,20 @@ function Groupbox:AddToggle(flag, opts)
         self.label.Position = Vector2.new(a.X + bs + 6, a.Y + (self.Height - Library.FontSize) / 2)
         self.label.ZIndex   = 4
         self.box.Visible, self.boxOl.Visible, self.label.Visible = true, true, true
+        if self.HasKeybind then
+            local txt = self:_keyLabel()
+            self.kTxt.Text = txt
+            local kw = math.max(self.kTxt.TextBounds.X + 8, 26)
+            local kh = 13
+            local kx = a.X + a.W - kw
+            local ky = a.Y + (self.Height - kh) / 2
+            setRect(self.kBox, self.kBoxOl, kx, ky, kw, kh, 3)
+            self.kBox.Color = (Library.CapturingKeybind == self) and Library.Theme.Accent or Library.Theme.Element
+            self.kTxt.Position = Vector2.new(kx + kw / 2, ky)
+            self.kTxt.ZIndex   = 5
+            self.kBox.Visible, self.kBoxOl.Visible, self.kTxt.Visible = true, true, true
+            self.KeyRect = { x = kx, y = ky, w = kw, h = kh }
+        end
         return true
     end
 
@@ -220,11 +261,31 @@ function Groupbox:AddToggle(flag, opts)
 
     function e:HandleClick(m)
         local a = self.Abs
+        -- la caja de tecla se come el click antes que el toggle
+        if self.HasKeybind and self.KeyRect then
+            local r = self.KeyRect
+            if pointInRect(m.X, m.Y, r.x, r.y, r.w, r.h) then
+                Library.CapturingKeybind = self
+                if self.Box.Window then self.Box.Window:Refresh() end
+                return true
+            end
+        end
         if pointInRect(m.X, m.Y, a.X, a.Y, a.W, self.Height) then
             self:Set(not Library.Flags[self.Flag])
             return true
         end
         return false
+    end
+
+    -- click derecho sobre la caja de tecla: cicla el modo Toggle -> Hold -> Always
+    function e:HandleRightClick(m)
+        if not (self.HasKeybind and self.KeyRect) then return false end
+        local r = self.KeyRect
+        if not pointInRect(m.X, m.Y, r.x, r.y, r.w, r.h) then return false end
+        local order = { Toggle = "Hold", Hold = "Always", Always = "Toggle" }
+        Library.Flags[self.ModeFlag] = order[Library.Flags[self.ModeFlag]] or "Toggle"
+        if self.Box.Window then self.Box.Window:Refresh() end
+        return true
     end
 
     -- dependent widgets under this toggle
@@ -813,6 +874,19 @@ end
 function Tab:AddLeftGroupbox(name)  return self:_newGroupbox(name, "Left")  end
 function Tab:AddRightGroupbox(name) return self:_newGroupbox(name, "Right") end
 
+-- Quitar un groupbox del tab (para que un modulo pueda soltar lo que inyecto)
+function Tab:RemoveGroupbox(gb)
+    for i, g in ipairs(self.Groupboxes) do
+        if g == gb then table.remove(self.Groupboxes, i); break end
+    end
+    for _, e in ipairs(gb.Elements) do
+        e:Draw(false)
+        if e.Flag then Library.Flags[e.Flag] = nil; Library.Toggles[e.Flag] = nil; Library.Options[e.Flag] = nil end
+    end
+    for _, o in ipairs({ gb.bg, gb.bgOl, gb.bodyBg, gb.outline, gb.title }) do o.Visible = false end
+    if self.Window then self.Window:Refresh() end
+end
+
 ----------------------------------------------------------------------
 -- WINDOW
 ----------------------------------------------------------------------
@@ -846,6 +920,15 @@ function Library:CreateWindow(opts)
 
     table.insert(Library.Windows, w)
     return w
+end
+
+-- buscar un tab ya creado por nombre (permite que un modulo externo inyecte
+-- groupboxes en tabs de la base sin que la base sepa nada del modulo)
+function Window:GetTab(name)
+    for _, t in ipairs(self.Tabs) do
+        if t.Name == name then return t end
+    end
+    return nil
 end
 
 function Window:AddTab(name)
@@ -974,6 +1057,99 @@ function Window:Refresh()
         self.scrollBg.Visible = false; self.scrollBar.Visible = false
     end
     self._panelTop, self._panelBottom = panelTop, panelBottom   -- para el hit-test del wheel
+end
+
+----------------------------------------------------------------------
+-- KEYBIND LIST  (panel en pantalla con los binds activos)
+--   Library:KeybindList({ Enabled = bool, X = n, Y = n })
+--   Lee Library.Keybinds. No sabe nada del juego.
+----------------------------------------------------------------------
+function Library:_ensureKbList()
+    if self.KbList then return self.KbList end
+    local K = { rows = {}, MAXROWS = 12 }
+    K.bg    = self:Draw("Square", { Filled = true,  Color = self.Theme.Background, Transparency = 0.75 })
+    K.bgOl  = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
+    K.hdr   = self:Draw("Square", { Filled = true,  Color = self.Theme.Accent })
+    K.title = self:Draw("Text",   { Font = self.Font, Size = self.FontSize, Color = self.Theme.Text, Text = "Keybinds" })
+    for i = 1, K.MAXROWS do
+        K.rows[i] = {
+            name = self:Draw("Text", { Font = self.Font, Size = self.FontSize - 1, Color = self.Theme.Text }),
+            key  = self:Draw("Text", { Font = self.Font, Size = self.FontSize - 1, Color = self.Theme.DimText }),
+        }
+    end
+    self.KbList = K
+    return K
+end
+
+function Library:_hideKbList()
+    local K = self.KbList
+    if not K then return end
+    K.bg.Visible, K.bgOl.Visible, K.hdr.Visible, K.title.Visible = false, false, false, false
+    for _, r in ipairs(K.rows) do r.name.Visible, r.key.Visible = false, false end
+end
+
+function Library:KeybindList(opts)
+    opts = opts or {}
+    if not opts.Enabled then self:_hideKbList(); return end
+    local K = self:_ensureKbList()
+    -- solo los que tienen tecla asignada
+    local live = {}
+    for _, e in ipairs(self.Keybinds) do
+        local k = self.Flags[e.KeyFlag]
+        if k and k ~= "None" and #live < K.MAXROWS then live[#live + 1] = e end
+    end
+    if #live == 0 then self:_hideKbList(); return end
+
+    local pad, rowH, hdrH = 6, 14, 16
+    local x, y = opts.X or 12, opts.Y or 12
+    -- ancho segun el contenido
+    local w = 90
+    for _, e in ipairs(live) do
+        K.rows[1].name.Text = e.Text
+        local need = K.rows[1].name.TextBounds.X + 60
+        if need > w then w = need end
+    end
+    local h = hdrH + pad + #live * rowH + pad
+
+    setRect(K.bg, K.bgOl, x, y, w, h, 90)
+    K.bgOl.ZIndex = 93
+    K.hdr.Position = Vector2.new(x, y); K.hdr.Size = Vector2.new(w, 2); K.hdr.ZIndex = 94
+    K.title.Position = Vector2.new(x + pad, y + 1); K.title.ZIndex = 92
+    K.bg.Visible, K.bgOl.Visible, K.hdr.Visible, K.title.Visible = true, true, true, true
+
+    for i, r in ipairs(K.rows) do
+        local e = live[i]
+        if e then
+            local ry = y + hdrH + pad + (i - 1) * rowH
+            local mode = self.Flags[e.ModeFlag] or "Toggle"
+            local on   = self.Flags[e.Flag] == true
+            r.name.Text     = e.Text
+            r.name.Color    = on and self.Theme.Text or self.Theme.DimText
+            r.name.Position = Vector2.new(x + pad, ry); r.name.ZIndex = 92
+            r.key.Text      = "[" .. tostring(self.Flags[e.KeyFlag]) .. "] " .. mode:sub(1, 1)
+            r.key.Color     = on and self.Theme.Accent or self.Theme.DimText
+            r.key.Position  = Vector2.new(x + w - pad - r.key.TextBounds.X, ry); r.key.ZIndex = 92
+            r.name.Visible, r.key.Visible = true, true
+        else
+            r.name.Visible, r.key.Visible = false, false
+        end
+    end
+end
+
+-- aplicar una tecla apretada/soltada a los keybinds registrados
+function Library:_fireKeybinds(keyName, pressed)
+    for _, e in ipairs(self.Keybinds) do
+        if self.Flags[e.KeyFlag] == keyName then
+            local mode = self.Flags[e.ModeFlag] or "Toggle"
+            if mode == "Toggle" then
+                if pressed then e:Set(not self.Flags[e.Flag]) end
+            elseif mode == "Hold" then
+                e:Set(pressed)
+            elseif mode == "Always" then
+                if pressed and not self.Flags[e.Flag] then e:Set(true) end
+            end
+        end
+    end
 end
 
 ----------------------------------------------------------------------
@@ -1133,9 +1309,42 @@ Library:Connect(UserInputService.InputBegan, function(input, gpe)
         end
         return
     end
+    -- captura de keybind: la proxima tecla queda bindeada (Escape = limpiar)
+    if Library.CapturingKeybind then
+        local e = Library.CapturingKeybind
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            local kc = input.KeyCode
+            Library.Flags[e.KeyFlag] = (kc == Enum.KeyCode.Escape) and "None" or kc.Name
+            Library.CapturingKeybind = nil
+            for _, w in ipairs(Library.Windows) do w:Refresh() end
+            return
+        elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+            Library.Flags[e.KeyFlag] = "None"
+            Library.CapturingKeybind = nil
+            for _, w in ipairs(Library.Windows) do w:Refresh() end
+            return
+        end
+    end
     if input.KeyCode == Library.ToggleKey then
         Library:Toggle()
         return
+    end
+    -- keybinds de features: andan SIEMPRE, con el menu abierto o cerrado
+    if input.UserInputType == Enum.UserInputType.Keyboard and not gpe then
+        Library:_fireKeybinds(input.KeyCode.Name, true)
+    end
+    -- click derecho sobre una caja de tecla: ciclar modo
+    if Library.Open and input.UserInputType == Enum.UserInputType.MouseButton2 then
+        local m = getMouse()
+        for _, w in ipairs(Library.Windows) do
+            if w.ActiveTab then
+                for _, gb in ipairs(w.ActiveTab.Groupboxes) do
+                    for _, e in ipairs(gb.Elements) do
+                        if e.HandleRightClick and Library:DepsMet(e) and e:HandleRightClick(m) then return end
+                    end
+                end
+            end
+        end
     end
     if not Library.Open then return end
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1193,6 +1402,8 @@ Library:Connect(UserInputService.InputEnded, function(input)
         Library.Dragging = nil
         Library.ActiveSlider = nil
         Library.PickerDrag = nil
+    elseif input.UserInputType == Enum.UserInputType.Keyboard and not Library.Unloaded then
+        Library:_fireKeybinds(input.KeyCode.Name, false)   -- soltar tecla: apaga los Hold
     end
 end)
 
@@ -1204,6 +1415,9 @@ function Library:Unload()
     self.Unloaded = true
     self.PromptOpen = false
     self.PromptUI   = nil
+    self.KbList     = nil
+    self.CapturingKeybind = nil
+    table.clear(self.Keybinds)
     for _, c in ipairs(self.Connections) do
         pcall(function() c:Disconnect() end)
     end
