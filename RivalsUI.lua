@@ -29,6 +29,7 @@ end
 
 local UserInputService = game:GetService("UserInputService")
 local GuiService       = game:GetService("GuiService")
+local RunService       = game:GetService("RunService")
 
 local Library = {
     Drawings   = {},
@@ -45,6 +46,12 @@ local Library = {
     InsetY     = 0,   -- set 36 if hitboxes are vertically shifted on your executor
 
     Keybinds   = {},   -- elementos con keybind (para la lista en pantalla)
+    Showcase       = nil,   -- panel del modelo 3D girando (wireframe)
+    ShowcaseOn     = false,
+    ShowcaseSpeed  = 0.6,
+    ShowcaseSize   = 190,
+    ShowcaseColor  = nil,
+    OnOpen         = nil,   -- callback al abrir el menu (para elegir modelo nuevo)
     CapturingKeybind = nil,   -- elemento esperando que apretes una tecla
 
     Dragging   = nil,
@@ -1065,6 +1072,135 @@ function Window:Refresh()
 end
 
 ----------------------------------------------------------------------
+-- SHOWCASE  (modelo 3D girando, wireframe, SOLO con Drawing)
+--   Library:ShowcaseFromModel(model) -> extrae las aristas de la caja de
+--   cada parte visible, en espacio local del modelo.
+--   Se rota y se proyecta a mano cada frame: cero ViewportFrame, cero
+--   instancias -> la UI sigue siendo invisible a un scan del arbol.
+--   El modelo lo elige quien use la lib (la lib no sabe nada del juego).
+----------------------------------------------------------------------
+local SHOW_MAXLINES = 180
+local BOX_EDGES = {
+    { 1, 2 }, { 3, 4 }, { 1, 3 }, { 2, 4 },   -- cara -Z
+    { 5, 6 }, { 7, 8 }, { 5, 7 }, { 6, 8 },   -- cara +Z
+    { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },   -- union
+}
+local function boxCorners(cf, size)
+    local x, y, z = size.X / 2, size.Y / 2, size.Z / 2
+    return {
+        cf * Vector3.new(-x, -y, -z), cf * Vector3.new(x, -y, -z),
+        cf * Vector3.new(-x,  y, -z), cf * Vector3.new(x,  y, -z),
+        cf * Vector3.new(-x, -y,  z), cf * Vector3.new(x, -y,  z),
+        cf * Vector3.new(-x,  y,  z), cf * Vector3.new(x,  y,  z),
+    }
+end
+
+function Library:_ensureShowcase()
+    if self.Showcase then return self.Showcase end
+    local S = { lines = {}, edges = {}, angle = 0, Title = "" }
+    S.bg    = self:Draw("Square", { Filled = true,  Color = self.Theme.Background, Transparency = 0.85 })
+    S.bgOl  = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
+    S.hdr   = self:Draw("Square", { Filled = true,  Color = self.Theme.Accent })
+    S.title = self:Draw("Text",   { Font = self.Font, Size = self.FontSize, Color = self.Theme.Text, Center = true })
+    self.Showcase = S
+    return S
+end
+
+-- Extrae la geometria de un Model cualquiera y la normaliza a caja unitaria.
+function Library:ShowcaseFromModel(model, title)
+    local S = self:_ensureShowcase()
+    S.edges = {}
+    S.Title = title or (model and model.Name) or ""
+    if not model then return end
+    local okBox, cf, size = pcall(function() local a, b = model:GetBoundingBox() return a, b end)
+    if not okBox or not cf then return end
+    local scale = math.max(size.X, size.Y, size.Z)
+    if scale <= 0 then return end
+    scale = 1 / scale
+    -- partes visibles ordenadas por volumen: las grandes primero (si hay que
+    -- recortar por el cap de lineas, que sobrevivan las que definen la silueta)
+    local parts = {}
+    for _, d in ipairs(model:GetDescendants()) do
+        if d:IsA("BasePart") and d.Transparency < 1 then
+            parts[#parts + 1] = { p = d, vol = d.Size.X * d.Size.Y * d.Size.Z }
+        end
+    end
+    table.sort(parts, function(a, b) return a.vol > b.vol end)
+    for _, entry in ipairs(parts) do
+        if #S.edges >= SHOW_MAXLINES then break end
+        local local_cf = cf:ToObjectSpace(entry.p.CFrame)
+        local c = boxCorners(local_cf, entry.p.Size)
+        for _, e in ipairs(BOX_EDGES) do
+            if #S.edges >= SHOW_MAXLINES then break end
+            S.edges[#S.edges + 1] = { c[e[1]] * scale, c[e[2]] * scale }
+        end
+    end
+end
+
+function Library:_hideShowcase()
+    local S = self.Showcase
+    if not S then return end
+    S.bg.Visible, S.bgOl.Visible, S.hdr.Visible, S.title.Visible = false, false, false, false
+    for _, l in ipairs(S.lines) do l.Visible = false end
+end
+
+-- proyeccion perspectiva a mano (no usa la camara del juego)
+function Library:_renderShowcase(dt)
+    local S = self.Showcase
+    if not (S and self.Open and self.ShowcaseOn and #S.edges > 0) then self:_hideShowcase() return end
+    local w = self.Windows[1]
+    if not w then self:_hideShowcase() return end
+
+    local size = self.ShowcaseSize or 190
+    local x = w.X + w.W + 8            -- pegado al costado derecho de la ventana
+    local y = w.Y
+    local hdrH = 18
+    setRect(S.bg, S.bgOl, x, y, size, size + hdrH, 12)
+    S.bgOl.ZIndex = 15
+    S.hdr.Position = Vector2.new(x, y); S.hdr.Size = Vector2.new(size, 2); S.hdr.ZIndex = 16
+    S.title.Text = S.Title
+    S.title.Position = Vector2.new(x + size / 2, y + 3); S.title.ZIndex = 14
+    S.bg.Visible, S.bgOl.Visible, S.hdr.Visible, S.title.Visible = true, true, true, true
+
+    S.angle = (S.angle + (dt or 0.016) * (self.ShowcaseSpeed or 0.6)) % (math.pi * 2)
+    local a = S.angle
+    local ca, sa = math.cos(a), math.sin(a)
+    local tilt = 0.35
+    local ct, st = math.cos(tilt), math.sin(tilt)
+    local cx, cy = x + size / 2, y + hdrH + size / 2
+    local focal = size * 1.15
+    local dist = 2.6
+    local col = self.ShowcaseColor or self.Theme.Accent
+
+    local function project(v)
+        local rx = v.X * ca + v.Z * sa          -- yaw
+        local rz = -v.X * sa + v.Z * ca
+        local ry = v.Y * ct - rz * st           -- pitch
+        local rz2 = v.Y * st + rz * ct
+        local z = rz2 + dist
+        if z < 0.1 then return nil end
+        local k = focal / z
+        return Vector2.new(cx + rx * k, cy - ry * k)
+    end
+
+    for i, e in ipairs(S.edges) do
+        local line = S.lines[i]
+        if not line then
+            line = self:Draw("Line", { Thickness = 1, Color = col })
+            S.lines[i] = line
+        end
+        local p1, p2 = project(e[1]), project(e[2])
+        if p1 and p2 then
+            line.From, line.To = p1, p2
+            line.Color = col; line.ZIndex = 13; line.Visible = true
+        else
+            line.Visible = false
+        end
+    end
+    for i = #S.edges + 1, #S.lines do S.lines[i].Visible = false end
+end
+
+----------------------------------------------------------------------
 -- KEYBIND LIST  (panel en pantalla con los binds activos)
 --   Library:KeybindList({ Enabled = bool, X = n, Y = n })
 --   Lee Library.Keybinds. No sabe nada del juego.
@@ -1295,8 +1431,11 @@ end
 ----------------------------------------------------------------------
 function Library:Toggle(state)
     if state == nil then state = not self.Open end
+    local wasOpen = self.Open
     self.Open = state
+    if state and not wasOpen then self:SafeCallback(self.OnOpen) end
     if not state then
+        self:_hideShowcase()
         if self.OpenDropdown then self.OpenDropdown:Close() end
         if self.OpenPicker then self.OpenPicker:Close() end
     end
@@ -1402,6 +1541,14 @@ Library:Connect(UserInputService.InputChanged, function(input)
     end
 end)
 
+-- unico loop por frame de la lib: solo para el modelo girando
+Library:Connect(RunService.RenderStepped, function(dt)
+    if Library.Unloaded then return end
+    if Library.ShowcaseOn and Library.Open then
+        pcall(function() Library:_renderShowcase(dt) end)
+    end
+end)
+
 Library:Connect(UserInputService.InputEnded, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then
         Library.Dragging = nil
@@ -1421,6 +1568,7 @@ function Library:Unload()
     self.PromptOpen = false
     self.PromptUI   = nil
     self.KbList     = nil
+    self.Showcase   = nil
     self.CapturingKeybind = nil
     table.clear(self.Keybinds)
     for _, c in ipairs(self.Connections) do
