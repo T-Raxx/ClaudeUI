@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rivals — menú de cheats en Drawing API</title>
+<meta name="description" content="Menú para Rivals construido sobre Drawing API: cero instancias, base sin hooks y el módulo rage aparte. Probá el menú acá mismo.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">rivals <span>/ 1.0</span></div>
+    <nav class="topnav">
+      <a href="#probar">Probar</a>
+      <a href="#escaner">Qué deja atrás</a>
+      <a href="#features">Features</a>
+      <a href="#modulos">Módulos</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero" id="probar" style="border-top:0">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Roblox · Rivals · Drawing API</p>
+      <h1>El menú no está<br>en el <em>árbol</em>.</h1>
+      <p class="lede">Está dibujado directo al framebuffer: <strong>cero instancias</strong>. Un scan del juego no lo encuentra porque no hay nada que encontrar.</p>
+      <p class="lede" style="margin-top:14px">La base no hookea nada. Lo que sí necesita hooks vive aparte y hay que pedirlo a mano.</p>
+
+      <div class="load">
+        <div class="load-h">
+          <span>loader</span>
+          <button class="copy" id="copy" type="button">copiar</button>
+        </div>
+        <div class="load-b" id="loadline">loadstring(game:HttpGet("https://raw.githubusercontent.com/T-Raxx/ClaudeUI/refs/heads/main/Loader.lua"))()</div>
+      </div>
+      <p class="hint">Ese menú es el de verdad, no una captura: arrastralo del header, tocá los toggles, movés los sliders. En el juego lo abre <kbd>RightShift</kbd>.</p>
+    </div>
+
+    <div class="stage" id="stage">
+      <span class="stage-tag">demo interactiva — no es una captura</span>
+
+      <div class="wm" id="wm" hidden>RIVALS | 142 fps | 100 ms | <span id="clock">00:00:00</span></div>
+
+      <div class="xhair"><i></i><i></i><i></i><i></i></div>
+      <div class="hudline" id="hudline" hidden>
+        <b id="hud-rage"></b>
+        <b class="void" id="hud-void" hidden>Void...</b>
+        <b class="kill" id="hud-kill">killing: EnZa_8745...</b>
+        <b class="hp" id="hud-hp">health: 87</b>
+      </div>
+
+      <div class="menu" id="menu">
+        <div class="menu-h" id="menu-h">RIVALS&nbsp;&nbsp;|&nbsp;&nbsp;1.0</div>
+        <div class="tabs" id="tabs" role="tablist"></div>
+        <div id="panels"></div>
+      </div>
+
+      <div class="modal" id="modal">
+        <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-t">
+          <h3 id="modal-t">AVISO — módulo avanzado (Rage)</h3>
+          <div id="modal-body"></div>
+          <div class="modal-btns">
+            <button class="acc" id="modal-yes" type="button">Cargar ahora</button>
+            <button id="modal-no" type="button">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="escaner">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="sec-n">Lo que deja atrás</p>
+      <h2>Un cheat honesto se mide por lo que aparece</h2>
+      <p>"Sin hooks" no es lo mismo que invisible. Prendé features y mirá qué instancias nuevas quedan en el árbol del juego. El menú nunca aparece — pero algunas features sí dejan rastro, y preferimos decirlo.</p>
+    </div>
+
+    <div class="scan">
+      <div class="scan-ctl">
+        <div class="scan-ctl-h">features</div>
+        <div class="scan-ctl-b" id="scan-ctl"></div>
+      </div>
+      <div class="tree">
+        <div class="tree-h">game:GetDescendants()</div>
+        <div class="tree-b" id="tree"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="sec-n">Features</p>
+      <h2>Qué hace</h2>
+      <p>Cada una está en el menú de arriba. Tocá "ver en el menú" y te lleva al control.</p>
+    </div>
+    <div class="feats" id="feats"></div>
+  </div>
+</section>
+
+<section id="modulos">
+  <div class="wrap">
+    <div class="sec-h">
+      <p class="sec-n">Módulos</p>
+      <h2>Qué se carga y cuándo</h2>
+      <p>La base se baja sola. El rage no: hay que pedirlo en Settings, avisa de los riesgos y chequea que tu ejecutor tenga las funciones antes de cargar.</p>
+    </div>
+    <div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr><th>Archivo</th><th>Qué es</th><th>Carga</th><th>Hooks</th></tr></thead>
+      <tbody>
+        <tr><td>Loader.lua</td><td>Baja el principal</td><td>—</td><td class="clean">no</td></tr>
+        <tr><td>RivalsMain.lua</td><td>ESP, aimbot, triggerbot, chams, HUD, configs</td><td>siempre</td><td class="clean">no</td></tr>
+        <tr><td>RivalsUI.lua</td><td>La librería de UI (Drawing)</td><td>siempre</td><td class="clean">no</td></tr>
+        <tr><td>RivalsVisuals.lua</td><td>Mundo: lighting, fog, tinte, cielo, clima</td><td>siempre</td><td class="clean">no</td></tr>
+        <tr><td>RivalsCombat.lua</td><td>Cámara y efectos, vía API del juego</td><td>siempre</td><td class="clean">no</td></tr>
+        <tr><td>RivalsRage.lua</td><td>Rage: spoof de posición, disparo interno, weld</td><td>a mano</td><td class="hooks">sí</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Requiere Drawing API y game:HttpGet. El módulo rage además necesita hookmetamethod, checkcaller, getgenv, setthreadidentity y sethiddenproperty.</p>
+    <p><a href="https://github.com/T-Raxx/ClaudeUI">github.com/T-Raxx/ClaudeUI</a></p>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
