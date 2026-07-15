@@ -55,6 +55,7 @@ local Library = {
     ShowcaseColor  = nil,
     OnOpen         = nil,   -- callback al abrir el menu (para elegir modelo nuevo)
     CapturingKeybind = nil,   -- elemento esperando que apretes una tecla
+    FocusedInput     = nil,   -- input de texto que esta recibiendo el teclado
 
     Dragging   = nil,
     DragOffset = Vector2.zero,
@@ -799,6 +800,117 @@ function Groupbox:AddColorPicker(flag, opts)
         local a = self.Abs
         if pointInRect(m.X, m.Y, a.X + a.W - SW, a.Y, SW, self.Height) then
             if Library.OpenPicker == self then self:Close() else self:Open() end
+            return true
+        end
+        return false
+    end
+
+    table.insert(self.Elements, e)
+    return e
+end
+
+----------------------------------------------------------------------
+-- INPUT de texto
+--   Drawing no recibe teclado, asi que se captura a mano: al clickear queda
+--   "enfocado" y InputBegan arma la string tecla por tecla (igual que la
+--   captura de keybinds). Enter confirma, Escape cancela, Backspace borra.
+----------------------------------------------------------------------
+local KEY_CHARS = {
+    Space = " ", Minus = "-", Underscore = "_",
+}
+function Groupbox:AddInput(flag, opts)
+    opts = opts or {}
+    local e = Element.new(self, "Input")
+    e.Flag = flag
+    e.Text = opts.Text or flag
+    e.Placeholder = opts.Placeholder or ""
+    e.MaxLen = opts.MaxLen or 24
+    e.Callback = opts.Callback
+    e.Finished = opts.Finished
+    e.Height = 30
+
+    Library.Flags[flag]   = opts.Default or ""
+    Library.Options[flag] = e
+
+    e.label = e:track(Library:Draw("Text",   { Font = Library.Font, Size = Library.FontSize, Color = Library.Theme.Text }))
+    e.box   = e:track(Library:Draw("Square", { Filled = true,  Color = Library.Theme.Element }))
+    e.boxOl = e:track(Library:Draw("Square", { Filled = false, Color = Library.Theme.Outline }))
+    e.value = e:track(Library:Draw("Text",   { Font = Library.Font, Size = Library.FontSize, Color = Library.Theme.Text }))
+
+    function e:Draw(shown)
+        local shownReal = shown and Library:DepsMet(self)
+        if not shownReal then
+            self:SetShownAll(false)
+            if Library.FocusedInput == self then Library.FocusedInput = nil end
+            return false
+        end
+        local a = self.Abs
+        self.label.Color = Library.Theme.Text
+        self.box.Color   = Library.Theme.Element
+        self.boxOl.Color = Library.Theme.Outline
+        self.label.Text = self.Text
+        self.label.Position = Vector2.new(a.X, a.Y); self.label.ZIndex = 4
+        local by = a.Y + 15
+        setRect(self.box, self.boxOl, a.X, by, a.W, 14, 3)
+        local txt = tostring(Library.Flags[self.Flag] or "")
+        local focused = Library.FocusedInput == self
+        if txt == "" and not focused then
+            self.value.Text = self.Placeholder
+            self.value.Color = Library.Theme.DimText
+        else
+            self.value.Text = txt .. (focused and "|" or "")
+            self.value.Color = Library.Theme.Text
+        end
+        self.value.Position = Vector2.new(a.X + 5, by + 1); self.value.ZIndex = 5
+        self.box.Color = focused and Library.Theme.Section or Library.Theme.Element
+        self.label.Visible, self.box.Visible, self.boxOl.Visible, self.value.Visible = true, true, true, true
+        return true
+    end
+
+    function e:Set(v)
+        Library.Flags[self.Flag] = tostring(v or "")
+        Library:SafeCallback(self.Callback, Library.Flags[self.Flag])
+        if self.Box.Window then self.Box.Window:Refresh() end
+    end
+
+    function e:HandleClick(m)
+        local a = self.Abs
+        if pointInRect(m.X, m.Y, a.X, a.Y + 15, a.W, 14) then
+            Library.FocusedInput = self
+            if self.Box.Window then self.Box.Window:Refresh() end
+            return true
+        end
+        return false
+    end
+
+    -- devuelve true si consumio la tecla
+    function e:HandleKey(input)
+        local kc = input.KeyCode
+        local cur = tostring(Library.Flags[self.Flag] or "")
+        if kc == Enum.KeyCode.Return or kc == Enum.KeyCode.KeypadEnter then
+            Library.FocusedInput = nil
+            Library:SafeCallback(self.Finished, cur)
+            if self.Box.Window then self.Box.Window:Refresh() end
+            return true
+        elseif kc == Enum.KeyCode.Escape then
+            Library.FocusedInput = nil
+            if self.Box.Window then self.Box.Window:Refresh() end
+            return true
+        elseif kc == Enum.KeyCode.Backspace then
+            self:Set(cur:sub(1, -2))
+            return true
+        end
+        local name = kc.Name
+        local ch = KEY_CHARS[name]
+        if not ch then
+            if #name == 1 then ch = name                       -- A-Z, 0-9
+            elseif name:match("^%a$") then ch = name
+            elseif name:match("^Zero$") then ch = "0"
+            end
+        end
+        if ch and #cur < self.MaxLen then
+            local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+            self:Set(cur .. (shift and ch:upper() or ch:lower()))
             return true
         end
         return false
@@ -1658,6 +1770,12 @@ Library:Connect(UserInputService.InputBegan, function(input, gpe)
         end
         return
     end
+    -- input de texto enfocado: se come el teclado (si no, escribir "e" en un
+    -- nombre dispararia el keybind del ESP)
+    if Library.FocusedInput and input.UserInputType == Enum.UserInputType.Keyboard then
+        if Library.FocusedInput:HandleKey(input) then return end
+        return
+    end
     -- captura de keybind: la proxima tecla queda bindeada (Escape = limpiar)
     if Library.CapturingKeybind then
         local e = Library.CapturingKeybind
@@ -1714,8 +1832,13 @@ Library:Connect(UserInputService.InputBegan, function(input, gpe)
             end
             return
         end
+        local hit = false
         for _, w in ipairs(Library.Windows) do
-            if w:HandleClick(m) then return end
+            if w:HandleClick(m) then hit = true break end
+        end
+        if not hit and Library.FocusedInput then
+            Library.FocusedInput = nil
+            for _, w in ipairs(Library.Windows) do w:Refresh() end
         end
     end
 end)
@@ -1779,6 +1902,7 @@ function Library:Unload()
     pcall(function() self:_killShowcaseGui() end)
     self.Showcase   = nil
     self.CapturingKeybind = nil
+    self.FocusedInput = nil
     table.clear(self.Keybinds)
     for _, c in ipairs(self.Connections) do
         pcall(function() c:Disconnect() end)

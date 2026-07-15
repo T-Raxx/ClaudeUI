@@ -194,8 +194,13 @@ function C:BuildUI(Library, Window)
     tp:AddLabel("El juego la restringe a handicaps/mobile")
     g:AddButton("Cambiar POV (1ra <-> 3ra)", function() self:TogglePOV() end)
     g:AddSlider("Cbt_FOV", { Text = "FOV extra", Min = -30, Max = 50, Default = 0, Suffix = "°" })
+    -- OJO: este toggle NO usa hooks (es _shake_enabled, un campo que el juego
+    -- consulta solo). El label del bobeo estaba aca abajo y se leia como si
+    -- fuera su advertencia -> movido a su propio groupbox.
     g:AddToggle("Cbt_NoShake", { Text = "Sin sacudida de camara", Default = false, Keybind = true })
-    g:AddLabel("El bobeo NO se puede quitar sin hooks")
+
+    local nb = T:AddRightGroupbox("No disponible")
+    nb:AddLabel("Sin bobeo: requiere hooks, no esta")
 
     local e = T:AddLeftGroupbox("Efectos enemigos")
     e:AddToggle("Cbt_AntiFlash", { Text = "Anti-flashbang", Default = false, Keybind = true })
