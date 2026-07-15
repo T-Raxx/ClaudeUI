@@ -48,8 +48,10 @@ local Library = {
     Keybinds   = {},   -- elementos con keybind (para la lista en pantalla)
     Showcase       = nil,   -- panel del modelo 3D girando (wireframe)
     ShowcaseOn     = false,
+    ShowcaseMode   = "Solido",   -- Solido (ViewportFrame) | Wireframe (0 instancias)
     ShowcaseSpeed  = 0.6,
-    ShowcaseSize   = 190,
+    ShowcaseSize   = 360,
+    ShowcaseDim    = 0.75,       -- oscurecido del juego con el menu abierto
     ShowcaseColor  = nil,
     OnOpen         = nil,   -- callback al abrir el menu (para elegir modelo nuevo)
     CapturingKeybind = nil,   -- elemento esperando que apretes una tecla
@@ -1072,18 +1074,27 @@ function Window:Refresh()
 end
 
 ----------------------------------------------------------------------
--- SHOWCASE  (modelo 3D girando, wireframe, SOLO con Drawing)
---   Library:ShowcaseFromModel(model) -> extrae las aristas de la caja de
---   cada parte visible, en espacio local del modelo.
---   Se rota y se proyecta a mano cada frame: cero ViewportFrame, cero
---   instancias -> la UI sigue siendo invisible a un scan del arbol.
---   El modelo lo elige quien use la lib (la lib no sabe nada del juego).
+-- SHOWCASE  (modelo 3D girando en el centro de la pantalla)
+--   Dos modos:
+--     "Solido"    -> ViewportFrame: el arma real, con sus colores y
+--                    materiales. CUESTA INSTANCIAS (ScreenGui + Frame +
+--                    ViewportFrame + el modelo clonado). Se parentea a
+--                    gethui() cuando existe, que es un contenedor
+--                    protegido del executor y no sale en un scan normal
+--                    del arbol; si no hay gethui, cae a CoreGui.
+--     "Wireframe" -> proyeccion a mano con Drawing.Line. 0 instancias,
+--                    la UI sigue siendo invisible a un scan.
+--   El oscurecido NO puede ser un Drawing: el Drawing se dibuja SIEMPRE
+--   por encima de cualquier GUI de Roblox, asi que taparia el
+--   ViewportFrame. Va como Frame en el mismo ScreenGui, debajo del
+--   modelo. El menu (Drawing) queda arriba de todo igual.
+--   La lib no sabe nada del juego: recibe cualquier Model.
 ----------------------------------------------------------------------
 local SHOW_MAXLINES = 180
 local BOX_EDGES = {
-    { 1, 2 }, { 3, 4 }, { 1, 3 }, { 2, 4 },   -- cara -Z
-    { 5, 6 }, { 7, 8 }, { 5, 7 }, { 6, 8 },   -- cara +Z
-    { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },   -- union
+    { 1, 2 }, { 3, 4 }, { 1, 3 }, { 2, 4 },
+    { 5, 6 }, { 7, 8 }, { 5, 7 }, { 6, 8 },
+    { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 },
 }
 local function boxCorners(cf, size)
     local x, y, z = size.X / 2, size.Y / 2, size.Z / 2
@@ -1097,85 +1108,175 @@ end
 
 function Library:_ensureShowcase()
     if self.Showcase then return self.Showcase end
-    local S = { lines = {}, edges = {}, angle = 0, Title = "" }
-    S.bg    = self:Draw("Square", { Filled = true,  Color = self.Theme.Background, Transparency = 0.85 })
-    S.bgOl  = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
-    S.hdr   = self:Draw("Square", { Filled = true,  Color = self.Theme.Accent })
-    S.title = self:Draw("Text",   { Font = self.Font, Size = self.FontSize, Color = self.Theme.Text, Center = true })
+    local S = { lines = {}, edges = {}, angle = 0, Title = "", model = nil }
+    S.title = self:Draw("Text", { Font = self.Font, Size = self.FontSize + 2, Color = self.Theme.Text, Center = true })
     self.Showcase = S
     return S
 end
 
--- Extrae la geometria de un Model cualquiera y la normaliza a caja unitaria.
+-- ScreenGui + dim + ViewportFrame (solo se crean si usas el modo solido)
+function Library:_ensureGui()
+    local S = self:_ensureShowcase()
+    if S.gui and S.gui.Parent then return S end
+    local parent
+    local ok = pcall(function() parent = gethui and gethui() end)
+    if not ok or not parent then parent = game:GetService("CoreGui") end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "LightingController"       -- nombre inocuo, como los del juego
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 9
+    gui.Enabled = false
+    pcall(function() if syn and syn.protect_gui then syn.protect_gui(gui) end end)
+    gui.Parent = parent
+
+    local dim = Instance.new("Frame")
+    dim.Name = "Backdrop"
+    dim.Size = UDim2.fromScale(1, 1)
+    dim.BackgroundColor3 = Color3.new(0, 0, 0)
+    dim.BackgroundTransparency = 0.75
+    dim.BorderSizePixel = 0
+    dim.ZIndex = 1
+    dim.Parent = gui
+
+    local vpf = Instance.new("ViewportFrame")
+    vpf.Name = "Model"
+    vpf.AnchorPoint = Vector2.new(0.5, 0.5)
+    vpf.Position = UDim2.fromScale(0.5, 0.5)
+    vpf.Size = UDim2.fromOffset(360, 360)
+    vpf.BackgroundTransparency = 1
+    vpf.ZIndex = 2
+    vpf.Ambient = Color3.fromRGB(190, 190, 200)
+    vpf.LightColor = Color3.fromRGB(255, 255, 255)
+    vpf.LightDirection = Vector3.new(-0.4, -1, -0.6)
+    vpf.Parent = gui
+
+    local cam = Instance.new("Camera")
+    cam.FieldOfView = 45
+    cam.Parent = vpf
+    vpf.CurrentCamera = cam
+
+    S.gui, S.dim, S.vpf, S.cam = gui, dim, vpf, cam
+    return S
+end
+
+-- Carga un Model: wireframe (aristas locales) y/o clon para el viewport.
 function Library:ShowcaseFromModel(model, title)
     local S = self:_ensureShowcase()
     S.edges = {}
     S.Title = title or (model and model.Name) or ""
     if not model then return end
+
     local okBox, cf, size = pcall(function() local a, b = model:GetBoundingBox() return a, b end)
     if not okBox or not cf then return end
+
+    -- ---- wireframe: aristas en espacio local, normalizadas
     local scale = math.max(size.X, size.Y, size.Z)
-    if scale <= 0 then return end
-    scale = 1 / scale
-    -- partes visibles ordenadas por volumen: las grandes primero (si hay que
-    -- recortar por el cap de lineas, que sobrevivan las que definen la silueta)
-    local parts = {}
-    for _, d in ipairs(model:GetDescendants()) do
-        if d:IsA("BasePart") and d.Transparency < 1 then
-            parts[#parts + 1] = { p = d, vol = d.Size.X * d.Size.Y * d.Size.Z }
+    if scale > 0 then
+        scale = 1 / scale
+        local parts = {}
+        for _, d in ipairs(model:GetDescendants()) do
+            if d:IsA("BasePart") and d.Transparency < 1 then
+                parts[#parts + 1] = { p = d, vol = d.Size.X * d.Size.Y * d.Size.Z }
+            end
+        end
+        -- por volumen: si el cap recorta, que sobreviva la silueta
+        table.sort(parts, function(a, b) return a.vol > b.vol end)
+        for _, entry in ipairs(parts) do
+            if #S.edges >= SHOW_MAXLINES then break end
+            local lcf = cf:ToObjectSpace(entry.p.CFrame)
+            local c = boxCorners(lcf, entry.p.Size)
+            for _, e in ipairs(BOX_EDGES) do
+                if #S.edges >= SHOW_MAXLINES then break end
+                S.edges[#S.edges + 1] = { c[e[1]] * scale, c[e[2]] * scale }
+            end
         end
     end
-    table.sort(parts, function(a, b) return a.vol > b.vol end)
-    for _, entry in ipairs(parts) do
-        if #S.edges >= SHOW_MAXLINES then break end
-        local local_cf = cf:ToObjectSpace(entry.p.CFrame)
-        local c = boxCorners(local_cf, entry.p.Size)
-        for _, e in ipairs(BOX_EDGES) do
-            if #S.edges >= SHOW_MAXLINES then break end
-            S.edges[#S.edges + 1] = { c[e[1]] * scale, c[e[2]] * scale }
+
+    -- ---- solido: clonar al viewport (solo si ese modo esta en uso)
+    if (self.ShowcaseMode or "Solido") == "Solido" then
+        self:_ensureGui()
+        if S.model then pcall(function() S.model:Destroy() end) S.model = nil end
+        local ok, clone = pcall(function() return model:Clone() end)
+        if not ok or not clone then return end
+        -- fuera scripts/efectos: solo geometria
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BaseScript") or d:IsA("ParticleEmitter") or d:IsA("Sound") or d:IsA("Beam") or d:IsA("Trail") then
+                pcall(function() d:Destroy() end)
+            end
         end
+        -- recentrar en el origen (el ViewportFrame no simula fisica: anclamos igual)
+        local bcf = clone:GetBoundingBox()
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA("BasePart") then
+                d.Anchored = true
+                d.CanCollide = false
+                d.CFrame = bcf:ToObjectSpace(d.CFrame)
+            end
+        end
+        clone.WorldPivot = CFrame.new()
+        clone.Parent = S.vpf
+        S.model = clone
+        -- encuadrar: distancia segun el radio de la caja y el FOV
+        local radius = size.Magnitude / 2
+        local fov = math.rad(S.cam.FieldOfView / 2)
+        S.dist = math.max(radius / math.tan(fov) * 1.15, 1)
     end
 end
 
 function Library:_hideShowcase()
     local S = self.Showcase
     if not S then return end
-    S.bg.Visible, S.bgOl.Visible, S.hdr.Visible, S.title.Visible = false, false, false, false
+    S.title.Visible = false
     for _, l in ipairs(S.lines) do l.Visible = false end
+    if S.gui then S.gui.Enabled = false end
 end
 
--- proyeccion perspectiva a mano (no usa la camara del juego)
 function Library:_renderShowcase(dt)
     local S = self.Showcase
-    if not (S and self.Open and self.ShowcaseOn and #S.edges > 0) then self:_hideShowcase() return end
-    local w = self.Windows[1]
-    if not w then self:_hideShowcase() return end
-
-    local size = self.ShowcaseSize or 190
-    local x = w.X + w.W + 8            -- pegado al costado derecho de la ventana
-    local y = w.Y
-    local hdrH = 18
-    setRect(S.bg, S.bgOl, x, y, size, size + hdrH, 12)
-    S.bgOl.ZIndex = 15
-    S.hdr.Position = Vector2.new(x, y); S.hdr.Size = Vector2.new(size, 2); S.hdr.ZIndex = 16
-    S.title.Text = S.Title
-    S.title.Position = Vector2.new(x + size / 2, y + 3); S.title.ZIndex = 14
-    S.bg.Visible, S.bgOl.Visible, S.hdr.Visible, S.title.Visible = true, true, true, true
-
+    if not (S and self.Open and self.ShowcaseOn) then self:_hideShowcase() return end
+    local mode = self.ShowcaseMode or "Solido"
     S.angle = (S.angle + (dt or 0.016) * (self.ShowcaseSpeed or 0.6)) % (math.pi * 2)
+
+    local cam = workspace.CurrentCamera
+    local vp = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+    local size = self.ShowcaseSize or 360
+    local cx, cy = vp.X / 2, vp.Y / 2
+
+    -- titulo debajo del modelo, sin ventana alrededor
+    S.title.Text = S.Title
+    S.title.Position = Vector2.new(cx, cy + size / 2 + 6)
+    S.title.ZIndex = 13
+    S.title.Visible = true
+
+    if mode == "Solido" then
+        for _, l in ipairs(S.lines) do l.Visible = false end
+        self:_ensureGui()
+        S.gui.Enabled = true
+        S.dim.BackgroundTransparency = self.ShowcaseDim or 0.75
+        S.vpf.Size = UDim2.fromOffset(size, size)
+        if S.model then
+            S.model:PivotTo(CFrame.Angles(0, S.angle, 0) * CFrame.Angles(0.25, 0, 0))
+            S.cam.CFrame = CFrame.new(Vector3.new(0, 0, S.dist or 6), Vector3.new(0, 0, 0))
+        end
+        return
+    end
+
+    -- ---- wireframe
+    if S.gui then S.gui.Enabled = false end
+    if #S.edges == 0 then return end
     local a = S.angle
     local ca, sa = math.cos(a), math.sin(a)
     local tilt = 0.35
     local ct, st = math.cos(tilt), math.sin(tilt)
-    local cx, cy = x + size / 2, y + hdrH + size / 2
     local focal = size * 1.15
     local dist = 2.6
     local col = self.ShowcaseColor or self.Theme.Accent
 
     local function project(v)
-        local rx = v.X * ca + v.Z * sa          -- yaw
+        local rx = v.X * ca + v.Z * sa
         local rz = -v.X * sa + v.Z * ca
-        local ry = v.Y * ct - rz * st           -- pitch
+        local ry = v.Y * ct - rz * st
         local rz2 = v.Y * st + rz * ct
         local z = rz2 + dist
         if z < 0.1 then return nil end
@@ -1198,6 +1299,15 @@ function Library:_renderShowcase(dt)
         end
     end
     for i = #S.edges + 1, #S.lines do S.lines[i].Visible = false end
+end
+
+-- destruir las instancias del modo solido (unload / cambio de modo)
+function Library:_killShowcaseGui()
+    local S = self.Showcase
+    if not S then return end
+    if S.model then pcall(function() S.model:Destroy() end) end
+    if S.gui then pcall(function() S.gui:Destroy() end) end
+    S.model, S.gui, S.dim, S.vpf, S.cam = nil, nil, nil, nil, nil
 end
 
 ----------------------------------------------------------------------
@@ -1541,12 +1651,15 @@ Library:Connect(UserInputService.InputChanged, function(input)
     end
 end)
 
--- unico loop por frame de la lib: solo para el modelo girando
+-- unico loop por frame de la lib: solo para el modelo girando.
+-- Corre SIEMPRE y _renderShowcase decide (el se oculta si el menu esta
+-- cerrado). Gatear el loop con `Open` dejaba estados inconsistentes sin
+-- quien los corrija: si el gui quedaba prendido justo al cerrar, nadie lo
+-- apagaba hasta la proxima apertura (1 de cada 8 cierres, medido). Asi se
+-- reconcilia solo cada frame.
 Library:Connect(RunService.RenderStepped, function(dt)
     if Library.Unloaded then return end
-    if Library.ShowcaseOn and Library.Open then
-        pcall(function() Library:_renderShowcase(dt) end)
-    end
+    pcall(function() Library:_renderShowcase(dt) end)
 end)
 
 Library:Connect(UserInputService.InputEnded, function(input)
@@ -1568,6 +1681,7 @@ function Library:Unload()
     self.PromptOpen = false
     self.PromptUI   = nil
     self.KbList     = nil
+    pcall(function() self:_killShowcaseGui() end)
     self.Showcase   = nil
     self.CapturingKeybind = nil
     table.clear(self.Keybinds)
