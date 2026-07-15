@@ -977,6 +977,139 @@ function Window:Refresh()
 end
 
 ----------------------------------------------------------------------
+-- PROMPT  (notificacion modal centrada en pantalla)
+--   Library:Prompt({
+--       Title   = "Aviso",
+--       Lines   = { "texto", { Text = "rojo", Color = Color3.new(1,0,0) } },
+--       Buttons = { { Text = "Cargar", Accent = true, Callback = fn }, { Text = "Cancelar" } },
+--   })
+--   Se dibuja encima de todo, funciona con el menu cerrado y consume
+--   todos los clicks mientras esta abierta (modal real).
+----------------------------------------------------------------------
+local PROMPT_MAXLINES, PROMPT_MAXBTN = 22, 3
+
+function Library:_ensurePrompt()
+    if self.PromptUI then return self.PromptUI end
+    local P = { lines = {}, buttons = {}, BtnRects = {}, Open = false }
+    P.dim    = self:Draw("Square", { Filled = true,  Color = Color3.new(0, 0, 0), Transparency = 0.55 })
+    P.bg     = self:Draw("Square", { Filled = true,  Color = self.Theme.Background })
+    P.bgOl   = self:Draw("Square", { Filled = false, Color = self.Theme.Outline })
+    P.accent = self:Draw("Square", { Filled = true,  Color = self.Theme.Accent })
+    P.title  = self:Draw("Text",   { Font = self.Font, Size = self.FontSize + 3, Color = self.Theme.Text, Center = true })
+    for i = 1, PROMPT_MAXLINES do
+        P.lines[i] = self:Draw("Text", { Font = self.Font, Size = self.FontSize, Color = self.Theme.DimText })
+    end
+    for i = 1, PROMPT_MAXBTN do
+        P.buttons[i] = {
+            bg = self:Draw("Square", { Filled = true,  Color = self.Theme.Element }),
+            ol = self:Draw("Square", { Filled = false, Color = self.Theme.Outline }),
+            tx = self:Draw("Text",   { Font = self.Font, Size = self.FontSize, Color = self.Theme.Text, Center = true }),
+        }
+    end
+    self.PromptUI = P
+    return P
+end
+
+function Library:Prompt(opts)
+    opts = opts or {}
+    local P = self:_ensurePrompt()
+    local pad, lineH, gap, btnH = 14, 16, 12, 24
+    local titleH = self.FontSize + 8
+
+    P.title.Text = tostring(opts.Title or "Aviso")
+    local maxW = P.title.TextBounds.X
+
+    local n = 0
+    for _, ln in ipairs(opts.Lines or {}) do
+        if n >= PROMPT_MAXLINES then break end
+        n = n + 1
+        local o = P.lines[n]
+        if type(ln) == "table" then
+            o.Text  = tostring(ln.Text or "")
+            o.Color = ln.Color or self.Theme.DimText
+        else
+            o.Text  = tostring(ln)
+            o.Color = self.Theme.DimText
+        end
+        if o.TextBounds.X > maxW then maxW = o.TextBounds.X end
+    end
+    for i = n + 1, PROMPT_MAXLINES do P.lines[i].Visible = false end
+
+    local btns = opts.Buttons or { { Text = "OK" } }
+    local nb   = math.min(#btns, PROMPT_MAXBTN)
+    local w    = math.clamp(maxW + pad * 2, 320, 760)
+    local h    = pad + titleH + 6 + n * lineH + gap + btnH + pad
+
+    local cam = workspace.CurrentCamera
+    local vp  = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+    local x   = math.floor(vp.X / 2 - w / 2)
+    local y   = math.floor(vp.Y / 2 - h / 2)
+    P.X, P.Y, P.W, P.H = x, y, w, h
+
+    P.dim.Position = Vector2.new(0, 0); P.dim.Size = Vector2.new(vp.X, vp.Y); P.dim.ZIndex = 100; P.dim.Visible = true
+    setRect(P.bg, P.bgOl, x, y, w, h, 101)
+    P.bgOl.ZIndex   = 108
+    P.accent.Position = Vector2.new(x, y); P.accent.Size = Vector2.new(w, 2); P.accent.ZIndex = 109
+    P.bg.Visible, P.bgOl.Visible, P.accent.Visible = true, true, true
+    P.title.Position = Vector2.new(x + w / 2, y + pad); P.title.ZIndex = 102; P.title.Visible = true
+
+    local ly = y + pad + titleH + 6
+    for i = 1, n do
+        local o = P.lines[i]
+        o.Position = Vector2.new(x + pad, ly); o.ZIndex = 102; o.Visible = true
+        ly = ly + lineH
+    end
+
+    P.BtnRects = {}
+    local bw = (w - pad * 2 - (nb - 1) * 8) / math.max(nb, 1)
+    local by = y + h - pad - btnH
+    for i = 1, PROMPT_MAXBTN do
+        local b = P.buttons[i]
+        if i <= nb then
+            local bx = x + pad + (i - 1) * (bw + 8)
+            setRect(b.bg, b.ol, bx, by, bw, btnH, 103)
+            b.ol.ZIndex = 104
+            b.bg.Color  = btns[i].Accent and self.Theme.Accent or self.Theme.Element
+            b.tx.Text   = tostring(btns[i].Text or "OK")
+            b.tx.Position = Vector2.new(bx + bw / 2, by + (btnH - self.FontSize) / 2)
+            b.tx.ZIndex = 105
+            b.bg.Visible, b.ol.Visible, b.tx.Visible = true, true, true
+            P.BtnRects[i] = { x = bx, y = by, w = bw, h = btnH, cb = btns[i].Callback }
+        else
+            b.bg.Visible, b.ol.Visible, b.tx.Visible = false, false, false
+        end
+    end
+
+    P.Open = true
+    self.PromptOpen = true
+    return P
+end
+
+function Library:ClosePrompt()
+    local P = self.PromptUI
+    if not P then return end
+    P.Open = false
+    self.PromptOpen = false
+    P.dim.Visible, P.bg.Visible, P.bgOl.Visible, P.accent.Visible, P.title.Visible = false, false, false, false, false
+    for _, o in ipairs(P.lines) do o.Visible = false end
+    for _, b in ipairs(P.buttons) do b.bg.Visible, b.ol.Visible, b.tx.Visible = false, false, false end
+end
+
+function Library:_promptClick(m)
+    local P = self.PromptUI
+    if not (P and P.Open) then return false end
+    for _, r in ipairs(P.BtnRects) do
+        if pointInRect(m.X, m.Y, r.x, r.y, r.w, r.h) then
+            local cb = r.cb
+            self:ClosePrompt()
+            self:SafeCallback(cb)
+            return true
+        end
+    end
+    return true   -- modal: come todo lo demas
+end
+
+----------------------------------------------------------------------
 -- global input
 ----------------------------------------------------------------------
 function Library:Toggle(state)
@@ -991,6 +1124,15 @@ end
 
 Library:Connect(UserInputService.InputBegan, function(input, gpe)
     if Library.Unloaded then return end
+    -- prompt modal: prioridad absoluta, incluso con el menu cerrado
+    if Library.PromptOpen then
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            Library:_promptClick(getMouse())
+        elseif input.KeyCode == Enum.KeyCode.Escape then
+            Library:ClosePrompt()
+        end
+        return
+    end
     if input.KeyCode == Library.ToggleKey then
         Library:Toggle()
         return
@@ -1060,6 +1202,8 @@ end)
 function Library:Unload()
     if self.Unloaded then return end
     self.Unloaded = true
+    self.PromptOpen = false
+    self.PromptUI   = nil
     for _, c in ipairs(self.Connections) do
         pcall(function() c:Disconnect() end)
     end
