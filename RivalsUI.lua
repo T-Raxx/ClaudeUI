@@ -236,6 +236,10 @@ function Groupbox:AddToggle(flag, opts)
         local a = self.Abs
         local bs = 13
         local by = a.Y + (self.Height - bs) / 2
+        self.box.Color   = Library.Theme.Element      -- releer el tema al dibujar
+        self.boxOl.Color = Library.Theme.Outline
+        self.fill.Color  = Library.Theme.Accent
+        self.label.Color = Library.Theme.Text
         setRect(self.box, self.boxOl, a.X, by, bs, bs, 3)
         self.fill.Position = Vector2.new(a.X + 2, by + 2)
         self.fill.Size     = Vector2.new(bs - 4, bs - 4)
@@ -254,6 +258,8 @@ function Groupbox:AddToggle(flag, opts)
             local ky = a.Y + (self.Height - kh) / 2
             setRect(self.kBox, self.kBoxOl, kx, ky, kw, kh, 3)
             self.kBox.Color = (Library.CapturingKeybind == self) and Library.Theme.Accent or Library.Theme.Element
+            self.kBoxOl.Color = Library.Theme.Outline
+            self.kTxt.Color = Library.Theme.DimText
             self.kTxt.Position = Vector2.new(kx + kw / 2, ky)
             self.kTxt.ZIndex   = 5
             self.kBox.Visible, self.kBoxOl.Visible, self.kTxt.Visible = true, true, true
@@ -363,6 +369,11 @@ function Groupbox:AddSlider(flag, opts)
         local shownReal = shown and Library:DepsMet(self)
         if not shownReal then self:SetShownAll(false); return false end
         local a = self.Abs
+        self.label.Color  = Library.Theme.Text
+        self.value.Color  = Library.Theme.DimText
+        self.track_.Color = Library.Theme.Element
+        self.trOl.Color   = Library.Theme.Outline
+        self.fill.Color   = Library.Theme.Accent
         self.label.Text     = self.Text
         self.label.Position = Vector2.new(a.X, a.Y)
         self.label.ZIndex   = 4
@@ -456,6 +467,13 @@ function Groupbox:AddDropdown(flag, opts)
         local shownReal = shown and Library:DepsMet(self)
         if not shownReal then self:SetShownAll(false); self.IsOpen = false; return false end
         local a = self.Abs
+        self.label.Color = Library.Theme.Text
+        self.box.Color   = Library.Theme.Element
+        self.boxOl.Color = Library.Theme.Outline
+        self.value.Color = Library.Theme.Text
+        self.arrow.Color = Library.Theme.DimText
+        self.listBg.Color = Library.Theme.Header
+        self.listOl.Color = Library.Theme.Outline
         self.label.Text = self.Text
         self.label.Position = Vector2.new(a.X, a.Y); self.label.ZIndex = 4
         local by = a.Y + 15
@@ -481,6 +499,7 @@ function Groupbox:AddDropdown(flag, opts)
                 local iy = by + 15 + (shown - 1) * ih
                 it.bg.Position = Vector2.new(a.X, iy); it.bg.Size = Vector2.new(a.W, ih); it.bg.ZIndex = 41
                 it.bg.Color = (it.value == Library.Flags[self.Flag]) and Library.Theme.Accent or Library.Theme.Header
+                it.text.Color = Library.Theme.Text
                 it.text.Position = Vector2.new(a.X + 5, iy + 1); it.text.ZIndex = 42
                 it.bg.Visible, it.text.Visible = open, open
             end
@@ -607,6 +626,7 @@ function Library:_renderPicker(owner)
     if not P then return end
     local x = owner.Abs.X
     local y = owner.Abs.Y + owner.Height + 3
+    P.bg.Color, P.bgOl.Color, P.hueOl.Color = self.Theme.Header, self.Theme.Outline, self.Theme.Outline
     P.X, P.Y = x, y
     local popupW, popupH = self:_popupSize()
     setRect(P.bg, P.bgOl, x, y, popupW, popupH, 50)
@@ -747,6 +767,8 @@ function Groupbox:AddColorPicker(flag, opts)
             self.H, self.S, self.V = cf:ToHSV()
             self.sw.Color = cf
         end
+        self.label.Color = Library.Theme.Text
+        self.swOl.Color  = Library.Theme.Outline
         self.label.Text = self.Text
         self.label.Position = Vector2.new(a.X, a.Y + (self.Height - Library.FontSize) / 2); self.label.ZIndex = 4
         local sh = 12
@@ -803,6 +825,9 @@ function Groupbox:AddButton(text, callback)
     function e:Draw(shown)
         if not shown then self:SetShownAll(false); return false end
         local a = self.Abs
+        self.box.Color   = Library.Theme.Element
+        self.boxOl.Color = Library.Theme.Outline
+        self.label.Color = Library.Theme.Text
         setRect(self.box, self.boxOl, a.X, a.Y, a.W, self.Height, 3)
         self.label.Text = self.Text
         self.label.Position = Vector2.new(a.X + a.W / 2, a.Y + (self.Height - Library.FontSize) / 2)
@@ -836,6 +861,7 @@ function Groupbox:AddLabel(text)
     function e:Draw(shown)
         if not shown then self:SetShownAll(false); return false end
         local a = self.Abs
+        self.label.Color = Library.Theme.DimText
         self.label.Text = self.Text
         self.label.Position = Vector2.new(a.X, a.Y + (self.Height - Library.FontSize) / 2)
         self.label.ZIndex = 4
@@ -864,6 +890,11 @@ function Groupbox:Layout(x, y, w, shown, clipTop, clipBottom)
     clipTop = clipTop or -1e9; clipBottom = clipBottom or 1e9
     local pad = 8
     local titleH = 18
+    self.bg.Color     = Library.Theme.Header
+    self.bgOl.Color   = Library.Theme.Outline
+    self.bodyBg.Color = Library.Theme.Section
+    self.outline.Color = Library.Theme.Outline
+    self.title.Color  = Library.Theme.Text
     -- header (clip vertical al panel)
     local headerVis = shown and (y + titleH > clipTop) and (y < clipBottom)
     setRect(self.bg, self.bgOl, x, y, w, titleH, 2)
@@ -1031,6 +1062,14 @@ function Window:Refresh()
     local headerH, tabH, pad, gap = 26, 24, 8, 8
 
     -- header
+    self.headerBg.Color = Library.Theme.Header
+    self.headerOl.Color = Library.Theme.Outline
+    self.bg.Color       = Library.Theme.Background
+    self.bgOl.Color     = Library.Theme.Outline
+    self.accent.Color   = Library.Theme.Accent
+    self.titleTxt.Color = Library.Theme.Text
+    self.scrollBg.Color = Library.Theme.Header
+    self.scrollBar.Color = Library.Theme.Accent
     self.headerBg.Position = Vector2.new(self.X, self.Y); self.headerBg.Size = Vector2.new(self.W, headerH); self.headerBg.ZIndex = 2
     self.headerOl.Position = self.headerBg.Position; self.headerOl.Size = self.headerBg.Size; self.headerOl.ZIndex = 7
     self.accent.Position = Vector2.new(self.X, self.Y); self.accent.Size = Vector2.new(self.W, 2); self.accent.ZIndex = 8
@@ -1113,21 +1152,18 @@ end
 
 ----------------------------------------------------------------------
 -- TEMA  (recolorear en caliente)
---   Los Drawing nacen con el color del tema en el momento de crearse, asi
---   que cambiar Library.Theme no repinta lo ya creado. En vez de trackear
---   que clave uso cada objeto, se remapea por color: los que tengan el
---   color viejo pasan al nuevo. Contenido: Library.Drawings solo tiene
---   objetos de la UI (el ESP y el HUD tienen sus propias listas), asi que
---   no hay colisiones con colores del juego.
+--   Cada elemento relee Library.Theme en su Draw/Layout, asi que cambiar el
+--   tema y refrescar alcanza.
+--
+--   ANTES esto remapeaba por color (buscar los objetos con el color viejo y
+--   pintarlos del nuevo) y estaba roto por diseno: dos claves con el MISMO
+--   color quedan indistinguibles, asi que tocar una movia las dos, y si el
+--   color viejo ya no le quedaba a nadie el cambio no hacia nada. El tema es
+--   la unica fuente de verdad; no hay que adivinar quien uso que.
 ----------------------------------------------------------------------
 function Library:SetTheme(key, color)
-    local old = self.Theme[key]
-    if not old or typeof(color) ~= "Color3" or old == color then return end
+    if typeof(color) ~= "Color3" or self.Theme[key] == nil then return end
     self.Theme[key] = color
-    for _, d in ipairs(self.Drawings) do
-        local ok, cur = pcall(function() return d.Color end)
-        if ok and cur == old then pcall(function() d.Color = color end) end
-    end
     for _, w in ipairs(self.Windows) do w:Refresh() end
 end
 
