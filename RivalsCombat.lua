@@ -21,10 +21,10 @@
           En _Setup: ShakeCFrame = if _shake_enabled and p12 then p12 else
           CFrame.identity. Es el switch que el juego ya consulta.
 
-      Offset : CameraController.ViewModelOffsetCFrame
-          Solo se inicializa a identity y despues se LEE para componer la
-          CFrame de la camara y del viewmodel. Nadie mas la escribe -> es un
-          punto de entrada libre. OJO: mueve camara Y viewmodel juntos.
+    DESCARTADO: ViewModelOffsetCFrame. En papel es un punto de entrada libre
+    (se inicializa a identity y solo se lee al componer la CFrame de camara y
+    viewmodel), y la escritura entra -- pero no produce efecto visible. Algo
+    mas abajo en la cadena la anula. Sacado hasta entender por que.
 
     NO se puede sin hooks (probado): quitar el bobeo. El de camara se
     calcula dentro de CameraController:Update y el del viewmodel dentro de
@@ -48,8 +48,9 @@ local C = {
         ThirdPerson = false,
         FOV = 0,                -- offset sobre el FOV base del juego (80)
         NoShake = false,
-        Offset = false,
-        OffsetX = 0, OffsetY = 0, OffsetZ = 0,
+        AntiFlash = false,
+        AntiSmoke = false,
+        SmokeLevel = 1,      -- 1 = humo invisible; 0.5 = a medias
     },
 }
 
@@ -104,12 +105,81 @@ function C:_step()
     local want = not noShake
     if cc._shake_enabled ~= want then cc._shake_enabled = want end
 
-    -- offset de camara + viewmodel
-    if self:_flag("Offset", false) then
-        local o = CFrame.new(self:_flag("OffsetX", 0), self:_flag("OffsetY", 0), self:_flag("OffsetZ", 0))
-        if cc.ViewModelOffsetCFrame ~= o then cc.ViewModelOffsetCFrame = o end
-    elseif cc.ViewModelOffsetCFrame ~= CFrame.identity then
-        cc.ViewModelOffsetCFrame = CFrame.identity
+    self:_applySmoke()
+
+    -- flash ya en pantalla al prender el toggle: barrer una vez
+    if self:_flag("AntiFlash", false) then
+        for _, d in ipairs(game:GetService("Lighting"):GetChildren()) do self:_killFlash(d) end
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then for _, d in ipairs(pg:GetChildren()) do self:_killFlash(d) end end
+    end
+end
+
+--[[ ------------------------------------------------------------------
+    ANTI-FLASH / ANTI-SMOKE
+    Sin hooks: el flashbang se arma con instancias identificables y el humo
+    con ParticleEmitters. Se los intercepta por evento (ChildAdded /
+    DescendantAdded), no escaneando cada frame.
+
+      Flash (Modules.ClientReplicatedClasses...FighterInterface.Flashed:Flash):
+        - clona FlashbangGui -> PlayerGui   (el destello blanco)
+        - crea ColorCorrectionEffect "Flashbang" -> Lighting  (la ceguera)
+      Los dos se neutralizan al aparecer. El resto del efecto (sonido de
+      pitido) se deja: no tapa la pantalla.
+
+      Humo: los ParticleEmitter del cloud. Se bajan por Transparency en vez
+      de Destroy, asi el juego puede seguir con su ciclo de vida normal.
+------------------------------------------------------------------ ]]
+local SMOKE_NAMES = { ["Smoke Grenade"] = true, ["Smoke"] = true, ["SmokeCloud"] = true }
+
+function C:_isSmoke(inst)
+    if not inst:IsA("ParticleEmitter") then return false end
+    local p = inst.Parent
+    while p and p ~= workspace do
+        if SMOKE_NAMES[p.Name] then return true end
+        p = p.Parent
+    end
+    return false
+end
+
+function C:_killFlash(inst)
+    if not self:_flag("AntiFlash", false) then return end
+    if inst:IsA("ColorCorrectionEffect") and inst.Name == "Flashbang" then
+        pcall(function() inst.Enabled = false end)
+    elseif inst:IsA("ScreenGui") and inst.Name == "FlashbangGui" then
+        pcall(function() inst.Enabled = false end)
+    end
+end
+
+function C:_watch()
+    local Lighting = game:GetService("Lighting")
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    self.Conns[#self.Conns + 1] = Lighting.ChildAdded:Connect(function(d) pcall(function() self:_killFlash(d) end) end)
+    if pg then
+        self.Conns[#self.Conns + 1] = pg.ChildAdded:Connect(function(d) pcall(function() self:_killFlash(d) end) end)
+    end
+    -- humo: se registra al aparecer; el nivel se aplica en _step
+    self._smoke = {}
+    self.Conns[#self.Conns + 1] = workspace.DescendantAdded:Connect(function(d)
+        pcall(function() if self:_isSmoke(d) then self._smoke[d] = d.Transparency end end)
+    end)
+end
+
+function C:_applySmoke()
+    local lvl = self:_flag("AntiSmoke", false) and self:_flag("SmokeLevel", 1) or 0
+    for e, orig in pairs(self._smoke or {}) do
+        if not e.Parent then
+            self._smoke[e] = nil
+        else
+            local ok = pcall(function()
+                if lvl > 0 then
+                    e.Transparency = NumberSequence.new(math.clamp(lvl, 0, 1))
+                elseif typeof(orig) == "NumberSequence" then
+                    e.Transparency = orig
+                end
+            end)
+            if not ok then self._smoke[e] = nil end
+        end
     end
 end
 
@@ -127,18 +197,19 @@ function C:BuildUI(Library, Window)
     g:AddToggle("Cbt_NoShake", { Text = "Sin sacudida de camara", Default = false, Keybind = true })
     g:AddLabel("El bobeo NO se puede quitar sin hooks")
 
-    local o = T:AddRightGroupbox("Offset camara + viewmodel")
-    local oe = o:AddToggle("Cbt_Offset", { Text = "Activar offset", Default = false })
-    oe:AddLabel("Mueve camara Y arma juntas")
-    oe:AddSlider("Cbt_OffsetX", { Text = "X (lateral)", Min = -5, Max = 5, Default = 0, Decimals = 2, Suffix = "st" })
-    oe:AddSlider("Cbt_OffsetY", { Text = "Y (altura)", Min = -5, Max = 5, Default = 0, Decimals = 2, Suffix = "st" })
-    oe:AddSlider("Cbt_OffsetZ", { Text = "Z (adelante)", Min = -5, Max = 5, Default = 0, Decimals = 2, Suffix = "st" })
+    local e = T:AddLeftGroupbox("Efectos enemigos")
+    e:AddToggle("Cbt_AntiFlash", { Text = "Anti-flashbang", Default = false, Keybind = true })
+    local sm = e:AddToggle("Cbt_AntiSmoke", { Text = "Anti-humo", Default = false, Keybind = true })
+    sm:AddSlider("Cbt_SmokeLevel", { Text = "Transparencia humo", Min = 0, Max = 1, Default = 1, Decimals = 2 })
+    e:AddLabel("Clientside: solo cambia lo que ves vos")
+
     return T
 end
 
 function C:Init()
     if self.Loaded then return self end
     self.Loaded = true
+    self:_watch()
     self.Conns[#self.Conns + 1] = RunService.RenderStepped:Connect(function()
         local ok, err = pcall(function() self:_step() end)
         if not ok then warn("[RivalsCombat] " .. tostring(err)) end
@@ -155,10 +226,14 @@ function C:Unload()
     if cc then
         pcall(function() cc:SetExternalFOVOffset(FOV_KEY, 0) end)
         pcall(function() cc:SetThirdPersonOverride(nil) end)
-        pcall(function() cc.ViewModelOffsetCFrame = CFrame.identity end)
         if self._shakeOrig ~= nil then pcall(function() cc._shake_enabled = self._shakeOrig end) end
     end
     self._shakeOrig = nil
+    -- devolver el humo que hayamos bajado
+    for e, orig in pairs(self._smoke or {}) do
+        pcall(function() if e.Parent and typeof(orig) == "NumberSequence" then e.Transparency = orig end end)
+    end
+    self._smoke = nil
 end
 
 return C

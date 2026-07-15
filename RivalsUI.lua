@@ -469,16 +469,50 @@ function Groupbox:AddDropdown(flag, opts)
         -- list overlay
         local open = self.IsOpen
         local ih = 16
-        setRect(self.listBg, self.listOl, a.X, by + 15, a.W, ih * #self.items, 40)
+        local nvals = #self.Values
+        setRect(self.listBg, self.listOl, a.X, by + 15, a.W, ih * nvals, 40)
         self.listBg.Visible, self.listOl.Visible = open, open
+        local shown = 0
         for i, it in ipairs(self.items) do
-            local iy = by + 15 + (i - 1) * ih
-            it.bg.Position = Vector2.new(a.X, iy); it.bg.Size = Vector2.new(a.W, ih); it.bg.ZIndex = 41
-            it.bg.Color = (it.value == Library.Flags[self.Flag]) and Library.Theme.Accent or Library.Theme.Header
-            it.text.Position = Vector2.new(a.X + 5, iy + 1); it.text.ZIndex = 42
-            it.bg.Visible, it.text.Visible = open, open
+            if it.value == nil then
+                it.bg.Visible, it.text.Visible = false, false
+            else
+                shown = shown + 1
+                local iy = by + 15 + (shown - 1) * ih
+                it.bg.Position = Vector2.new(a.X, iy); it.bg.Size = Vector2.new(a.W, ih); it.bg.ZIndex = 41
+                it.bg.Color = (it.value == Library.Flags[self.Flag]) and Library.Theme.Accent or Library.Theme.Header
+                it.text.Position = Vector2.new(a.X + 5, iy + 1); it.text.ZIndex = 42
+                it.bg.Visible, it.text.Visible = open, open
+            end
         end
         return true
+    end
+
+    -- reemplazar la lista en caliente (p.ej. perfiles de config que aparecen
+    -- y desaparecen). Recrea los Drawing de los items que falten.
+    function e:SetValues(vals, keep)
+        self.Values = vals or {}
+        for i, val in ipairs(self.Values) do
+            local it = self.items[i]
+            if not it then
+                it = {
+                    bg   = self:track(Library:Draw("Square", { Filled = true, Color = Library.Theme.Header })),
+                    text = self:track(Library:Draw("Text", { Font = Library.Font, Size = Library.FontSize, Color = Library.Theme.Text })),
+                }
+                self.items[i] = it
+            end
+            it.value = val
+            it.text.Text = tostring(val)
+        end
+        for i = #self.Values + 1, #self.items do
+            self.items[i].bg.Visible, self.items[i].text.Visible = false, false
+            self.items[i].value = nil
+        end
+        local cur = Library.Flags[self.Flag]
+        local still = false
+        for _, v in ipairs(self.Values) do if v == cur then still = true break end end
+        if not still and not keep then Library.Flags[self.Flag] = self.Values[1] end
+        if self.Box.Window then self.Box.Window:Refresh() end
     end
 
     function e:Open()
@@ -515,12 +549,16 @@ function Groupbox:AddDropdown(flag, opts)
         local a = self.Abs
         local ih = 16
         local top = a.Y + 30
-        for i, it in ipairs(self.items) do
-            local iy = top + (i - 1) * ih
-            if pointInRect(m.X, m.Y, a.X, iy, a.W, ih) then
-                self:Set(it.value)
-                self:Close()
-                return true
+        local shown = 0
+        for _, it in ipairs(self.items) do
+            if it.value ~= nil then
+                shown = shown + 1
+                local iy = top + (shown - 1) * ih
+                if pointInRect(m.X, m.Y, a.X, iy, a.W, ih) then
+                    self:Set(it.value)
+                    self:Close()
+                    return true
+                end
             end
         end
         return false
@@ -1071,6 +1109,35 @@ function Window:Refresh()
         self.scrollBg.Visible = false; self.scrollBar.Visible = false
     end
     self._panelTop, self._panelBottom = panelTop, panelBottom   -- para el hit-test del wheel
+end
+
+----------------------------------------------------------------------
+-- TEMA  (recolorear en caliente)
+--   Los Drawing nacen con el color del tema en el momento de crearse, asi
+--   que cambiar Library.Theme no repinta lo ya creado. En vez de trackear
+--   que clave uso cada objeto, se remapea por color: los que tengan el
+--   color viejo pasan al nuevo. Contenido: Library.Drawings solo tiene
+--   objetos de la UI (el ESP y el HUD tienen sus propias listas), asi que
+--   no hay colisiones con colores del juego.
+----------------------------------------------------------------------
+function Library:SetTheme(key, color)
+    local old = self.Theme[key]
+    if not old or typeof(color) ~= "Color3" or old == color then return end
+    self.Theme[key] = color
+    for _, d in ipairs(self.Drawings) do
+        local ok, cur = pcall(function() return d.Color end)
+        if ok and cur == old then pcall(function() d.Color = color end) end
+    end
+    for _, w in ipairs(self.Windows) do w:Refresh() end
+end
+
+-- cambiar la fuente de toda la UI en caliente
+function Library:SetFont(font)
+    self.Font = font
+    for _, d in ipairs(self.Drawings) do
+        pcall(function() if d.Font ~= nil then d.Font = font end end)
+    end
+    for _, w in ipairs(self.Windows) do w:Refresh() end
 end
 
 ----------------------------------------------------------------------
