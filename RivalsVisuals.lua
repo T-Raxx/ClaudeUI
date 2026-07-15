@@ -63,12 +63,12 @@ local V = {
         TintContrast = 0,
         TintSaturation = 0,
         TintColor = Color3.fromRGB(255, 255, 255),
-        MenuBloom = false,          -- bloom SOLO con el menu abierto (vive en Settings)
-        MenuBloomIntensity = 0.7,
-        MenuBloomSize = 24,
-        MenuBloomThreshold = 0.9,
-        Blur = false,
-        BlurSize = 4,
+        MenuBlur = false,           -- blur SOLO con el menu abierto (vive en Settings)
+        MenuBlurSize = 12,
+        Bloom = false,              -- bloom = efecto del MUNDO (bajo el master)
+        BloomIntensity = 0.4,
+        BloomSize = 24,
+        BloomThreshold = 0.95,
         SunRays = false,
         SunRaysIntensity = 0.05,
         SunRaysSpread = 0.5,
@@ -207,9 +207,13 @@ function V:_applyTint()
         cc.Saturation = self:_flag("TintSaturation", 0)
         cc.TintColor  = self:_flag("TintColor", Color3.new(1, 1, 1))
     end
-    local bu = self:_fx("BlurEffect")
-    bu.Enabled = self:_flag("Blur", false)
-    if bu.Enabled then bu.Size = self:_flag("BlurSize", 4) end
+    local bm = self:_fx("BloomEffect")
+    bm.Enabled = self:_flag("Bloom", false)
+    if bm.Enabled then
+        bm.Intensity = self:_flag("BloomIntensity", 0.4)
+        bm.Size      = self:_flag("BloomSize", 24)
+        bm.Threshold = self:_flag("BloomThreshold", 0.95)
+    end
     local sr = self:_fx("SunRaysEffect")
     sr.Enabled = self:_flag("SunRays", false)
     if sr.Enabled then
@@ -242,21 +246,19 @@ function V:_applySky()
     self:_set(clouds, "Color", self:_flag("CloudColor", Color3.new(1, 1, 1)))
 end
 
--- Bloom del MENU: es estetica de la UI, no del mundo -> vive en Settings, no
+-- Blur del MENU: es estetica de la UI, no del mundo -> vive en Settings, no
 -- depende del master de visuales y solo prende con el menu abierto (igual que
 -- el "GlowyBackgroundBlur - MainGui" que ya usa el juego).
 function V:_applyMenuFX()
-    local want = self:_flag("MenuBloom", false) and (self._lib and self._lib.Open) or false
+    local want = self:_flag("MenuBlur", false) and (self._lib and self._lib.Open) or false
+    local bu = self._fxCache and self._fxCache.BlurEffect
     if not want then
-        local b = self._fxCache and self._fxCache.BloomEffect
-        if b then b.Enabled = false end
+        if bu then bu.Enabled = false end
         return
     end
-    local bl = self:_fx("BloomEffect")
-    bl.Enabled   = true
-    bl.Intensity = self:_flag("MenuBloomIntensity", 0.7)
-    bl.Size      = self:_flag("MenuBloomSize", 24)
-    bl.Threshold = self:_flag("MenuBloomThreshold", 0.9)
+    bu = self:_fx("BlurEffect")
+    bu.Enabled = true
+    bu.Size    = self:_flag("MenuBlurSize", 12)
 end
 
 ----------------------------------------------------------------------
@@ -375,8 +377,8 @@ function V:_off()
     if self._wxEmit then self._wxEmit.Enabled = false end
     if self._fxCache then
         for class, inst in pairs(self._fxCache) do
-            -- el bloom del menu NO se apaga aca: no depende del master
-            if class ~= "BloomEffect" then
+            -- el blur del menu NO se apaga aca: no depende del master
+            if class ~= "BlurEffect" then
                 pcall(function() if inst:IsA("PostEffect") then inst.Enabled = false end end)
             end
         end
@@ -399,10 +401,8 @@ function V:BuildUI(Library, Window)
     local st = Window:GetTab("Settings")
     if st then
         local mb  = st:AddLeftGroupbox("Menu FX")
-        local mbe = mb:AddToggle("Vis_MenuBloom", { Text = "Bloom con el menu abierto", Default = false })
-        mbe:AddSlider("Vis_MenuBloomIntensity", { Text = "Intensidad", Min = 0, Max = 5, Default = 0.7, Decimals = 2 })
-        mbe:AddSlider("Vis_MenuBloomSize",      { Text = "Tamano", Min = 0, Max = 56, Default = 24 })
-        mbe:AddSlider("Vis_MenuBloomThreshold", { Text = "Umbral", Min = 0, Max = 3, Default = 0.9, Decimals = 2 })
+        local mbe = mb:AddToggle("Vis_MenuBlur", { Text = "Blur con el menu abierto", Default = false })
+        mbe:AddSlider("Vis_MenuBlurSize", { Text = "Fuerza", Min = 0, Max = 40, Default = 12 })
         self._menuBox, self._menuTab = mb, st
     end
 
@@ -435,8 +435,10 @@ function V:BuildUI(Library, Window)
     ti:AddSlider("Vis_TintContrast",   { Text = "Contraste", Min = -1, Max = 1, Default = 0, Decimals = 2 })
     ti:AddSlider("Vis_TintSaturation", { Text = "Saturacion", Min = -1, Max = 3, Default = 0, Decimals = 2 })
     ti:AddColorPicker("Vis_TintColor", { Text = "Color", Default = Color3.fromRGB(255, 255, 255) })
-    local bl = t:AddToggle("Vis_Blur", { Text = "Blur", Default = false })
-    bl:AddSlider("Vis_BlurSize", { Text = "Tamano", Min = 0, Max = 30, Default = 4 })
+    local bm = t:AddToggle("Vis_Bloom", { Text = "Bloom", Default = false })
+    bm:AddSlider("Vis_BloomIntensity", { Text = "Intensidad", Min = 0, Max = 5, Default = 0.4, Decimals = 2 })
+    bm:AddSlider("Vis_BloomSize",      { Text = "Tamano", Min = 0, Max = 56, Default = 24 })
+    bm:AddSlider("Vis_BloomThreshold", { Text = "Umbral", Min = 0, Max = 3, Default = 0.95, Decimals = 2 })
     local sr = t:AddToggle("Vis_SunRays", { Text = "Rayos de sol", Default = false })
     sr:AddSlider("Vis_SunRaysIntensity", { Text = "Intensidad", Min = 0, Max = 1, Default = 0.05, Decimals = 3 })
     sr:AddSlider("Vis_SunRaysSpread",    { Text = "Dispersion", Min = 0, Max = 1, Default = 0.5, Decimals = 2 })
