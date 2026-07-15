@@ -310,6 +310,11 @@ function Groupbox:AddToggle(flag, opts)
         self:_dependChild(c, true)
         return c
     end
+    function e:AddLabel(text)
+        local c = self.Box:AddLabel(text)
+        self:_dependChild(c, true)
+        return c
+    end
 
     table.insert(self.Elements, e)
     return e
