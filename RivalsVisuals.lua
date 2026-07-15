@@ -23,7 +23,11 @@ local Lighting   = game:GetService("Lighting")
 local RunService = game:GetService("RunService")
 local Terrain    = workspace:FindFirstChildOfClass("Terrain")
 
-local PARTICLE_TEX = "rbxasset://textures/particles/sparkles_main.dds"
+-- Texturas de particulas del PROPIO juego (ya cargadas, no dependen de red ni
+-- pueden faltar). sparkles_main.dds del cliente es un GLOW redondo: estirado con
+-- Squash da "lineas random", no lluvia. streaks = trazo real de gota.
+local TEX_RAIN = "rbxassetid://13911374915"   -- "streaks"
+local TEX_SNOW = "rbxassetid://15414665346"   -- "dots"
 
 local V = {
     Conns   = {},
@@ -59,10 +63,10 @@ local V = {
         TintContrast = 0,
         TintSaturation = 0,
         TintColor = Color3.fromRGB(255, 255, 255),
-        Bloom = false,
-        BloomIntensity = 0.4,
-        BloomSize = 24,
-        BloomThreshold = 0.95,
+        MenuBloom = false,          -- bloom SOLO con el menu abierto (vive en Settings)
+        MenuBloomIntensity = 0.7,
+        MenuBloomSize = 24,
+        MenuBloomThreshold = 0.9,
         Blur = false,
         BlurSize = 4,
         SunRays = false,
@@ -70,12 +74,16 @@ local V = {
         SunRaysSpread = 0.5,
         -- cielo
         NoSky = false,
-        CloudsMode = "Juego",     -- Juego | Custom | Off
+        Clouds = false,           -- toggle: off = nubes del juego intactas
+        NoClouds = false,
         CloudCover = 0.5,
         CloudDensity = 0.7,
         CloudColor = Color3.fromRGB(255, 255, 255),
         -- clima
-        Weather = "Off",          -- Off | Lluvia | Lluvia fuerte | Nieve
+        Weather = false,
+        WeatherMode = "Lluvia",   -- Lluvia | Lluvia fuerte | Nieve
+        WeatherTransparency = 0.35,
+        WeatherGlow = 0.15,
         WeatherDensity = 1,
         WeatherSpeed = 1,
         WeatherSize = 1,
@@ -161,6 +169,9 @@ function V:_applyFog()
         self:_set(Lighting, "FogEnd", self:_flag("FogEnd", 2500))
         self:_set(Lighting, "FogColor", self:_flag("FogColor", self.Settings.FogColor))
     end
+    -- OJO: la sola PRESENCIA de un Atmosphere anula FogStart/FogEnd/FogColor.
+    -- Density=0 no alcanza: hay que DESTRUIRLO o el fog queda muerto para siempre
+    -- (ese era el bug de "fog no funciona" tras tocar el toggle de atmosfera).
     if self:_flag("Atmosphere", false) then
         local a = self:_fx("Atmosphere")
         a.Density = self:_flag("AtmDensity", 0.3)
@@ -169,9 +180,19 @@ function V:_applyFog()
         a.Haze    = self:_flag("AtmHaze", 0)
         a.Color   = self:_flag("AtmColor", self.Settings.AtmColor)
         a.Decay   = self:_flag("AtmDecay", self.Settings.AtmDecay)
-    elseif self._fxCache and self._fxCache.Atmosphere then
-        self._fxCache.Atmosphere.Density = 0
+    else
+        self:_killAtmosphere()
     end
+end
+
+function V:_killAtmosphere()
+    local a = self._fxCache and self._fxCache.Atmosphere
+    if not a then return end
+    for i, inst in ipairs(self._made) do
+        if inst == a then table.remove(self._made, i) break end
+    end
+    pcall(function() a:Destroy() end)
+    self._fxCache.Atmosphere = nil
 end
 
 ----------------------------------------------------------------------
@@ -185,13 +206,6 @@ function V:_applyTint()
         cc.Contrast   = self:_flag("TintContrast", 0)
         cc.Saturation = self:_flag("TintSaturation", 0)
         cc.TintColor  = self:_flag("TintColor", Color3.new(1, 1, 1))
-    end
-    local bl = self:_fx("BloomEffect")
-    bl.Enabled = self:_flag("Bloom", false)
-    if bl.Enabled then
-        bl.Intensity = self:_flag("BloomIntensity", 0.4)
-        bl.Size      = self:_flag("BloomSize", 24)
-        bl.Threshold = self:_flag("BloomThreshold", 0.95)
     end
     local bu = self:_fx("BlurEffect")
     bu.Enabled = self:_flag("Blur", false)
@@ -217,25 +231,32 @@ function V:_applySky()
     end
     if not Terrain then return end
     local clouds = Terrain:FindFirstChildOfClass("Clouds")
-    local mode = self:_flag("CloudsMode", "Juego")
-    if mode == "Juego" then
-        if clouds and self._orig[clouds] then
-            for prop, val in pairs(self._orig[clouds]) do pcall(function() clouds[prop] = val end) end
-        end
+    if not self:_flag("Clouds", false) then
+        -- toggle off = nubes del juego intactas (_restoreAll devuelve lo que tocamos)
         return
     end
-    if not clouds then
-        if mode == "Off" then return end
-        clouds = self:_fx("Clouds", Terrain)
+    if not clouds then clouds = self:_fx("Clouds", Terrain) end
+    self:_set(clouds, "Enabled", not self:_flag("NoClouds", false))
+    self:_set(clouds, "Cover", self:_flag("CloudCover", 0.5))
+    self:_set(clouds, "Density", self:_flag("CloudDensity", 0.7))
+    self:_set(clouds, "Color", self:_flag("CloudColor", Color3.new(1, 1, 1)))
+end
+
+-- Bloom del MENU: es estetica de la UI, no del mundo -> vive en Settings, no
+-- depende del master de visuales y solo prende con el menu abierto (igual que
+-- el "GlowyBackgroundBlur - MainGui" que ya usa el juego).
+function V:_applyMenuFX()
+    local want = self:_flag("MenuBloom", false) and (self._lib and self._lib.Open) or false
+    if not want then
+        local b = self._fxCache and self._fxCache.BloomEffect
+        if b then b.Enabled = false end
+        return
     end
-    if mode == "Off" then
-        self:_set(clouds, "Enabled", false)
-    else
-        self:_set(clouds, "Enabled", true)
-        self:_set(clouds, "Cover", self:_flag("CloudCover", 0.5))
-        self:_set(clouds, "Density", self:_flag("CloudDensity", 0.7))
-        self:_set(clouds, "Color", self:_flag("CloudColor", Color3.new(1, 1, 1)))
-    end
+    local bl = self:_fx("BloomEffect")
+    bl.Enabled   = true
+    bl.Intensity = self:_flag("MenuBloomIntensity", 0.7)
+    bl.Size      = self:_flag("MenuBloomSize", 24)
+    bl.Threshold = self:_flag("MenuBloomThreshold", 0.9)
 end
 
 ----------------------------------------------------------------------
@@ -244,18 +265,28 @@ end
 --   camara cada frame -> el clima te acompana por todo el mapa sin
 --   tocar nada del juego.
 ----------------------------------------------------------------------
+--[[ La lluvia se veia como "lineas random" por DOS motivos:
+     1) Rotation = NumberRange.new(0,360) -> cada gota rotada al azar. La lluvia
+        real cae toda en la misma direccion -> rotacion FIJA por modo.
+     2) textura de glow redondo estirada con Squash -> trazo sucio, no gota.
+     La nieve se comia el color del user porque LightEmission=0.8 la hacia emitir
+     luz blanca propia. Con glow bajo el color manda, y la sutileza sale de
+     glow/transparencia (sliders), NO de forzar gris. ]]
 local WX = {
     ["Lluvia"] = {
-        rate = 220, speed = 90, life = 1.1, size = 0.32, squash = 14,
-        spread = 3, drag = 0, accel = Vector3.new(0, -30, 0), transp = 0.35, light = 0.4,
+        tex = TEX_RAIN, rate = 400, speed = 105, life = 1.0, size = 0.9,
+        squash = 6, spread = 1.5, drag = 0, accel = Vector3.new(0, -35, 0),
+        transp = 0.45, light = 0.15, rot = 0, rotSpeed = 0, tilt = -3,
     },
     ["Lluvia fuerte"] = {
-        rate = 900, speed = 135, life = 0.9, size = 0.42, squash = 20,
-        spread = 6, drag = 0, accel = Vector3.new(-8, -60, 0), transp = 0.2, light = 0.5,
+        tex = TEX_RAIN, rate = 1400, speed = 150, life = 0.85, size = 1.15,
+        squash = 9, spread = 2.5, drag = 0, accel = Vector3.new(-14, -70, 0),
+        transp = 0.3, light = 0.2, rot = -9, rotSpeed = 0, tilt = -9,
     },
     ["Nieve"] = {
-        rate = 240, speed = 7, life = 5.5, size = 0.45, squash = 0,
-        spread = 28, drag = 2.5, accel = Vector3.new(1.5, -3, 0.8), transp = 0.1, light = 0.8,
+        tex = TEX_SNOW, rate = 190, speed = 6, life = 6.5, size = 0.28,
+        squash = 0, spread = 26, drag = 2.8, accel = Vector3.new(1.2, -2.4, 0.7),
+        transp = 0.25, light = 0.05, rot = 0, rotSpeed = 22, tilt = 0,
     },
 }
 
@@ -271,10 +302,8 @@ function V:_wxRig()
     p.Size = Vector3.new(1, 1, 1)
     p.Parent = workspace
     local e = Instance.new("ParticleEmitter")
-    e.Texture = PARTICLE_TEX
     e.Enabled = false
     e.EmissionDirection = Enum.NormalId.Bottom
-    e.Rotation = NumberRange.new(0, 360)
     e.LockedToPart = false
     e.Parent = p
     self._wxPart, self._wxEmit = p, e
@@ -283,11 +312,12 @@ function V:_wxRig()
 end
 
 function V:_applyWeather()
-    local mode = self:_flag("Weather", "Off")
-    if mode == "Off" then
+    if not self:_flag("Weather", false) then
         if self._wxEmit then self._wxEmit.Enabled = false end
+        self._lastWx = nil
         return
     end
+    local mode = self:_flag("WeatherMode", "Lluvia")
     local cfg = WX[mode]
     if not cfg then return end
     local part, emit = self:_wxRig()
@@ -300,28 +330,33 @@ function V:_applyWeather()
 
     if self._lastWx ~= mode then       -- reconfigurar solo al cambiar de modo
         self._lastWx = mode
-        emit.EmissionDirection = Enum.NormalId.Bottom
-        emit.Drag     = cfg.drag
-        emit.Squash   = NumberSequence.new(cfg.squash)
+        emit.Texture   = cfg.tex
+        emit.Drag      = cfg.drag
+        emit.Squash    = NumberSequence.new(cfg.squash)
         emit.SpreadAngle = Vector2.new(cfg.spread, cfg.spread)
-        emit.Transparency = NumberSequence.new(cfg.transp)
-        emit.LightEmission = cfg.light
-        emit.ZOffset = 0
+        emit.Rotation  = NumberRange.new(cfg.rot)          -- FIJA: la lluvia cae pareja
+        emit.RotSpeed  = NumberRange.new(-cfg.rotSpeed, cfg.rotSpeed)
+        emit.ZOffset   = 0
+        emit.EmissionDirection = Enum.NormalId.Bottom
     end
     local dens = self:_flag("WeatherDensity", 1)
     local spd  = self:_flag("WeatherSpeed", 1)
     local sz   = self:_flag("WeatherSize", 1)
     emit.Rate       = cfg.rate * dens
-    emit.Lifetime   = NumberRange.new(cfg.life)
-    emit.Speed      = NumberRange.new(cfg.speed * spd)
+    emit.Lifetime   = NumberRange.new(cfg.life * 0.85, cfg.life)
+    emit.Speed      = NumberRange.new(cfg.speed * spd * 0.9, cfg.speed * spd)
     emit.Acceleration = cfg.accel * spd
     emit.Size       = NumberSequence.new(cfg.size * sz)
     emit.Color      = ColorSequence.new(self:_flag("WeatherColor", self.Settings.WeatherColor))
+    -- glow/transparencia configurables: la sutileza NO viene de forzar el color
+    emit.LightEmission = self:_flag("WeatherGlow", cfg.light)
+    emit.Transparency  = NumberSequence.new(self:_flag("WeatherTransparency", cfg.transp))
     emit.Enabled    = true
 end
 
 ----------------------------------------------------------------------
 function V:_step()
+    self:_applyMenuFX()   -- estetica del menu: fuera del master de visuales
     if not self:_flag("Enabled", false) then
         if self._wasOn then self:_off() end
         return
@@ -339,11 +374,14 @@ function V:_off()
     self._lastWx = nil
     if self._wxEmit then self._wxEmit.Enabled = false end
     if self._fxCache then
-        for _, inst in pairs(self._fxCache) do
-            pcall(function() if inst:IsA("PostEffect") then inst.Enabled = false end end)
+        for class, inst in pairs(self._fxCache) do
+            -- el bloom del menu NO se apaga aca: no depende del master
+            if class ~= "BloomEffect" then
+                pcall(function() if inst:IsA("PostEffect") then inst.Enabled = false end end)
+            end
         end
-        if self._fxCache.Atmosphere then pcall(function() self._fxCache.Atmosphere.Density = 0 end) end
     end
+    self:_killAtmosphere()   -- destruir, no Density=0: si queda, mata el fog
     self:_restoreAll()
 end
 
@@ -352,8 +390,21 @@ end
 ----------------------------------------------------------------------
 function V:BuildUI(Library, Window)
     if self._uiTab then return self._uiTab end
+    self._lib = Library          -- para saber si el menu esta abierto (bloom)
     local T = Window:AddTab("Mundo")
     self._uiTab = T
+
+    -- Bloom = estetica del MENU, no del mundo -> se inyecta en Settings y no
+    -- depende del master de visuales.
+    local st = Window:GetTab("Settings")
+    if st then
+        local mb  = st:AddLeftGroupbox("Menu FX")
+        local mbe = mb:AddToggle("Vis_MenuBloom", { Text = "Bloom con el menu abierto", Default = false })
+        mbe:AddSlider("Vis_MenuBloomIntensity", { Text = "Intensidad", Min = 0, Max = 5, Default = 0.7, Decimals = 2 })
+        mbe:AddSlider("Vis_MenuBloomSize",      { Text = "Tamano", Min = 0, Max = 56, Default = 24 })
+        mbe:AddSlider("Vis_MenuBloomThreshold", { Text = "Umbral", Min = 0, Max = 3, Default = 0.9, Decimals = 2 })
+        self._menuBox, self._menuTab = mb, st
+    end
 
     local w = T:AddLeftGroupbox("Mundo")
     local en = w:AddToggle("Vis_Enabled", { Text = "Enable visuales", Default = false, Keybind = true })
@@ -369,7 +420,8 @@ function V:BuildUI(Library, Window)
     f:AddSlider("Vis_FogStart", { Text = "Fog inicio", Min = 0, Max = 2000, Default = 0, Suffix = "st" })
     f:AddSlider("Vis_FogEnd",   { Text = "Fog fin", Min = 100, Max = 10000, Default = 2500, Suffix = "st" })
     f:AddColorPicker("Vis_FogColor", { Text = "Color fog", Default = Color3.fromRGB(190, 195, 210) })
-    local atm = f:AddToggle("Vis_Atmosphere", { Text = "Atmosfera", Default = false })
+    f:AddLabel("Atmosfera ON = el fog de arriba se ignora")
+    local atm = f:AddToggle("Vis_Atmosphere", { Text = "Atmosfera (reemplaza el fog)", Default = false })
     atm:AddSlider("Vis_AtmDensity", { Text = "Densidad", Min = 0, Max = 1, Default = 0.3, Decimals = 3 })
     atm:AddSlider("Vis_AtmOffset",  { Text = "Offset", Min = 0, Max = 1, Default = 0.25, Decimals = 2 })
     atm:AddSlider("Vis_AtmGlare",   { Text = "Glare", Min = 0, Max = 10, Default = 0, Decimals = 1 })
@@ -383,10 +435,6 @@ function V:BuildUI(Library, Window)
     ti:AddSlider("Vis_TintContrast",   { Text = "Contraste", Min = -1, Max = 1, Default = 0, Decimals = 2 })
     ti:AddSlider("Vis_TintSaturation", { Text = "Saturacion", Min = -1, Max = 3, Default = 0, Decimals = 2 })
     ti:AddColorPicker("Vis_TintColor", { Text = "Color", Default = Color3.fromRGB(255, 255, 255) })
-    local bm = t:AddToggle("Vis_Bloom", { Text = "Bloom", Default = false })
-    bm:AddSlider("Vis_BloomIntensity", { Text = "Intensidad", Min = 0, Max = 5, Default = 0.4, Decimals = 2 })
-    bm:AddSlider("Vis_BloomSize",      { Text = "Tamano", Min = 0, Max = 56, Default = 24 })
-    bm:AddSlider("Vis_BloomThreshold", { Text = "Umbral", Min = 0, Max = 3, Default = 0.95, Decimals = 2 })
     local bl = t:AddToggle("Vis_Blur", { Text = "Blur", Default = false })
     bl:AddSlider("Vis_BlurSize", { Text = "Tamano", Min = 0, Max = 30, Default = 4 })
     local sr = t:AddToggle("Vis_SunRays", { Text = "Rayos de sol", Default = false })
@@ -395,19 +443,24 @@ function V:BuildUI(Library, Window)
 
     local s = T:AddRightGroupbox("Cielo / nubes")
     s:AddToggle("Vis_NoSky", { Text = "Sin cuerpos celestes", Default = false })
-    s:AddDropdown("Vis_CloudsMode", { Text = "Nubes", Values = { "Juego", "Custom", "Off" }, Default = "Juego" })
-    s:AddSlider("Vis_CloudCover",   { Text = "Cobertura", Min = 0, Max = 1, Default = 0.5, Decimals = 2 })
-    s:AddSlider("Vis_CloudDensity", { Text = "Densidad", Min = 0, Max = 1, Default = 0.7, Decimals = 2 })
-    s:AddColorPicker("Vis_CloudColor", { Text = "Color nubes", Default = Color3.fromRGB(255, 255, 255) })
+    local cl = s:AddToggle("Vis_Clouds", { Text = "Nubes custom", Default = false })
+    cl:AddToggle("Vis_NoClouds",     { Text = "Sin nubes", Default = false })
+    cl:AddSlider("Vis_CloudCover",   { Text = "Cobertura", Min = 0, Max = 1, Default = 0.5, Decimals = 2 })
+    cl:AddSlider("Vis_CloudDensity", { Text = "Densidad", Min = 0, Max = 1, Default = 0.7, Decimals = 2 })
+    cl:AddColorPicker("Vis_CloudColor", { Text = "Color nubes", Default = Color3.fromRGB(255, 255, 255) })
 
     local c = T:AddLeftGroupbox("Clima")
     c:AddLabel("Particulas locales: solo las ves vos")
-    c:AddDropdown("Vis_Weather", { Text = "Clima", Values = { "Off", "Lluvia", "Lluvia fuerte", "Nieve" }, Default = "Off" })
-    c:AddSlider("Vis_WeatherDensity", { Text = "Densidad", Min = 0.1, Max = 4, Default = 1, Decimals = 2, Suffix = "x" })
-    c:AddSlider("Vis_WeatherSpeed",   { Text = "Velocidad", Min = 0.1, Max = 3, Default = 1, Decimals = 2, Suffix = "x" })
-    c:AddSlider("Vis_WeatherSize",    { Text = "Tamano", Min = 0.2, Max = 4, Default = 1, Decimals = 2, Suffix = "x" })
-    c:AddSlider("Vis_WeatherArea",    { Text = "Area", Min = 30, Max = 200, Default = 90, Suffix = "st" })
-    c:AddColorPicker("Vis_WeatherColor", { Text = "Color", Default = Color3.fromRGB(220, 230, 255) })
+    local wx = c:AddToggle("Vis_Weather", { Text = "Clima", Default = false, Keybind = true })
+    wx:AddDropdown("Vis_WeatherMode", { Text = "Tipo", Values = { "Lluvia", "Lluvia fuerte", "Nieve" }, Default = "Lluvia" })
+    wx:AddColorPicker("Vis_WeatherColor", { Text = "Color", Default = Color3.fromRGB(220, 230, 255) })
+    wx:AddSlider("Vis_WeatherTransparency", { Text = "Transparencia", Min = 0, Max = 1, Default = 0.35, Decimals = 2 })
+    wx:AddSlider("Vis_WeatherGlow",    { Text = "Brillo propio", Min = 0, Max = 1, Default = 0.15, Decimals = 2 })
+    wx:AddSlider("Vis_WeatherDensity", { Text = "Densidad", Min = 0.1, Max = 4, Default = 1, Decimals = 2, Suffix = "x" })
+    wx:AddSlider("Vis_WeatherSpeed",   { Text = "Velocidad", Min = 0.1, Max = 3, Default = 1, Decimals = 2, Suffix = "x" })
+    wx:AddSlider("Vis_WeatherSize",    { Text = "Tamano", Min = 0.2, Max = 4, Default = 1, Decimals = 2, Suffix = "x" })
+    wx:AddSlider("Vis_WeatherArea",    { Text = "Area", Min = 30, Max = 200, Default = 90, Suffix = "st" })
+    c:AddLabel("Brillo bajo = el color se ve real")
 
     return T
 end
@@ -428,6 +481,10 @@ function V:Unload()
     for _, c in ipairs(self.Conns) do pcall(function() c:Disconnect() end) end
     table.clear(self.Conns)
     self:_restoreAll()
+    if self._menuBox and self._menuTab and self._menuTab.RemoveGroupbox then
+        pcall(function() self._menuTab:RemoveGroupbox(self._menuBox) end)
+    end
+    self._menuBox, self._menuTab = nil, nil
     for _, inst in ipairs(self._made) do pcall(function() inst:Destroy() end) end
     table.clear(self._made)
     self._fxCache = nil
