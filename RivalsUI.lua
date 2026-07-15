@@ -1109,7 +1109,6 @@ end
 function Library:_ensureShowcase()
     if self.Showcase then return self.Showcase end
     local S = { lines = {}, edges = {}, angle = 0, Title = "", model = nil }
-    S.title = self:Draw("Text", { Font = self.Font, Size = self.FontSize + 2, Color = self.Theme.Text, Center = true })
     self.Showcase = S
     return S
 end
@@ -1227,7 +1226,6 @@ end
 function Library:_hideShowcase()
     local S = self.Showcase
     if not S then return end
-    S.title.Visible = false
     for _, l in ipairs(S.lines) do l.Visible = false end
     if S.gui then S.gui.Enabled = false end
 end
@@ -1242,12 +1240,6 @@ function Library:_renderShowcase(dt)
     local vp = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
     local size = self.ShowcaseSize or 360
     local cx, cy = vp.X / 2, vp.Y / 2
-
-    -- titulo debajo del modelo, sin ventana alrededor
-    S.title.Text = S.Title
-    S.title.Position = Vector2.new(cx, cy + size / 2 + 6)
-    S.title.ZIndex = 13
-    S.title.Visible = true
 
     if mode == "Solido" then
         for _, l in ipairs(S.lines) do l.Visible = false end
