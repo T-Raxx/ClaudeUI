@@ -65,7 +65,7 @@ const TABS = [
     { side: 0, title: "Efectos enemigos", els: [
       { t: "toggle", f: "Cbt_AntiFlash", x: "Anti-flashbang", key: "F" },
       { t: "toggle", f: "Cbt_AntiSmoke", x: "Anti-humo" },
-      { t: "label", x: "Clientside: solo cambia lo que ves vos" },
+      { t: "label", x: "Clientside: solo cambia lo que tú ves" },
     ]},
     { side: 1, title: "Cámara (API del juego)", els: [
       { t: "label", x: "Sin hooks: usa la API del propio Rivals" },
@@ -89,7 +89,7 @@ const TABS = [
       ]},
     ]},
     { side: 0, title: "Clima", els: [
-      { t: "label", x: "Partículas locales: solo las ves vos" },
+      { t: "label", x: "Partículas locales: solo tú las ves" },
       { t: "toggle", f: "Vis_Weather", x: "Clima", key: "K", deps: [
         { t: "dropdown", f: "Vis_WeatherMode", x: "Tipo", vals: ["Lluvia", "Lluvia fuerte", "Nieve"] },
         { t: "color", f: "Vis_WeatherColor", x: "Color", d: "#dce6ff" },
@@ -487,7 +487,7 @@ document.getElementById("wm").hidden = !F.HUD_Watermark;
 
 /* ---------------------------------------------------------------- features -> llevan al control */
 const FEATS = [
-  { h: "ESP completo", p: "Box, nombre, vida, distancia, esqueleto R15, chams, flechas para los que no ves, color por team o visibilidad, nivel y arma equipada.", tab: 0 },
+  { h: "ESP completo", p: "Box, nombre, vida, distancia, esqueleto R15, chams, flechas para los que no están en pantalla, color por team o visibilidad, nivel y arma equipada.", tab: 0 },
   { h: "Filtro por arena", p: "Rivals corre varios duelos por servidor. Por defecto solo ves gente de tu duelo, no de las otras arenas.", tab: 0 },
   { h: "Granadas y trampas", p: "Las que se despliegan durante la ronda, cazadas por evento: no escanea el mapa por frame.", tab: 0 },
   { h: "Aimbot y triggerbot", p: "Apuntado por mouse real o por cámara, con FOV, suavizado y chequeo de visibilidad.", tab: 1 },

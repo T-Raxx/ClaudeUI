@@ -79,7 +79,7 @@ a { color: var(--accent); }
 
 /* ---------------------------------------------------------------- hero */
 .hero { padding: 64px 0 40px; }
-.hero-grid { display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 48px; align-items: start; }
+.hero-grid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 44px; align-items: start; }
 .hero-grid > * { min-width: 0; }
 @media (max-width: 1000px) { .hero-grid { grid-template-columns: 1fr; gap: 32px; } }
 
@@ -125,7 +125,7 @@ kbd {
 
 /* ---------------------------------------------------------------- stage */
 .stage {
-    position: relative; min-height: 560px; border: 1px solid var(--outline);
+    position: relative; min-height: 680px; border: 1px solid var(--outline);
     background:
         repeating-linear-gradient(0deg,  #0e0e11 0 1px, transparent 1px 34px),
         repeating-linear-gradient(90deg, #0e0e11 0 1px, transparent 1px 34px),
@@ -192,7 +192,7 @@ kbd {
 }
 .tab[aria-selected="true"] { background: var(--section); color: var(--text); }
 
-.panel { display: none; padding: 8px; gap: 8px; max-height: 430px; overflow-y: auto; }
+.panel { display: none; padding: 8px; gap: 8px; max-height: 540px; overflow-y: auto; }
 .panel[data-open] { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
 .panel::-webkit-scrollbar { width: 3px; }
 .panel::-webkit-scrollbar-track { background: var(--header); }

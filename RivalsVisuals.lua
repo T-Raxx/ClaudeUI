@@ -452,7 +452,7 @@ function V:BuildUI(Library, Window)
     cl:AddColorPicker("Vis_CloudColor", { Text = "Color nubes", Default = Color3.fromRGB(255, 255, 255) })
 
     local c = T:AddLeftGroupbox("Clima")
-    c:AddLabel("Particulas locales: solo las ves vos")
+    c:AddLabel("Particulas locales: solo tu las ves")
     local wx = c:AddToggle("Vis_Weather", { Text = "Clima", Default = false, Keybind = true })
     wx:AddDropdown("Vis_WeatherMode", { Text = "Tipo", Values = { "Lluvia", "Lluvia fuerte", "Nieve" }, Default = "Lluvia" })
     wx:AddColorPicker("Vis_WeatherColor", { Text = "Color", Default = Color3.fromRGB(220, 230, 255) })

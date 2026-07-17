@@ -206,7 +206,7 @@ function C:BuildUI(Library, Window)
     e:AddToggle("Cbt_AntiFlash", { Text = "Anti-flashbang", Default = false, Keybind = true })
     local sm = e:AddToggle("Cbt_AntiSmoke", { Text = "Anti-humo", Default = false, Keybind = true })
     sm:AddSlider("Cbt_SmokeLevel", { Text = "Transparencia humo", Min = 0, Max = 1, Default = 1, Decimals = 2 })
-    e:AddLabel("Clientside: solo cambia lo que ves vos")
+    e:AddLabel("Clientside: solo cambia lo que tú ves")
 
     return T
 end
